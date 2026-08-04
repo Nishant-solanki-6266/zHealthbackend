@@ -227,25 +227,95 @@ model Appointment {
 }
 
 model Invoice {
-  id            String   @id @default(uuid())
-  displayId     String?  @unique
-  invoiceNumber String   @unique
-  patientId     String?
-  patientName   String
-  issueDate     String
-  dueDate       String
-  amount        Float    @default(0.0)
-  due           Float    @default(0.0)
-  status        String   @default("Draft")
-  sentStatus    String   @default("Not Sent")
-  items         Json?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id               String   @id @default(uuid())
+  displayId        String?  @unique
+  invoiceNumber    String?
+  patientId        String?
+  patientName      String?
+  clientName       String?
+  recipient        String?
+  practitionerName String?
+  service          String?
+  issueDate        String?
+  dueDate          String?
+  amount           Float    @default(0.0)
+  due              Float    @default(0.0)
+  status           String   @default("Draft")
+  sentStatus       String   @default("Not Sent")
+  items            Json?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
   patient Patient? @relation(fields: [patientId], references: [id], onDelete: SetNull)
 
   @@map("invoices")
 }
+
+model Payment {
+  id               String   @id @default(uuid())
+  receiptNumber    String   @unique
+  clientName       String
+  amount           Float    @default(0.0)
+  paymentDate      String
+  paymentMethod    String   @default("Stripe / Credit Card")
+  invoiceReference String?
+  status           String   @default("Successful (Paid)")
+  transactionId    String?
+  patientId        String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@map("payments")
+}
+
+model Product {
+  id          String   @id @default(uuid())
+  displayId   String?  @unique
+  name        String
+  category    String?
+  description String?
+  itemCode    String?
+  vendor      String?
+  tax         String?  @default("GST Free Income")
+  xeroAccount String?  @default("200 - Sales")
+  price       Float    @default(0.0)
+  stock       Int      @default(0)
+  archived    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("products")
+}
+
+model Document {
+  id          String   @id @default(uuid())
+  name        String
+  patientName String
+  sentTo      String?
+  uploadBy    String   @default("Doctor Dr.APJ Kalam")
+  date        String
+  type        String   @default("Assessment")
+  status      String   @default("Active")
+  patientId   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("documents")
+}
+
+model BodyChartTemplate {
+  id              String   @id @default(uuid())
+  practitionerId  String?
+  name            String
+  description     String?
+  thumbnailUrl    String?
+  canvasData      Json?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("body_chart_templates")
+}
+
 
 model SalesUser {
   id             String   @id @default(uuid())
@@ -297,11 +367,60 @@ model SalesLead {
   tier          String?  @default("Basic")
   stage         String?  @default("Lead Registered")
   notes         String?  @db.Text
+  history       Json?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
   @@map("sales_leads")
 }
+
+model SalesTask {
+  id          String   @id @default(uuid())
+  displayId   String?  @unique
+  title       String
+  category    String?  @default("Calls")
+  leadName    String?
+  dueDate     String?
+  priority    String   @default("Medium")
+  status      String   @default("Pending")
+  assignedTo  String?
+  notes       String?  @db.Text
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("sales_tasks")
+}
+
+model SalesCalendarEvent {
+  id          String   @id @default(uuid())
+  displayId   String?  @unique
+  title       String
+  date        String
+  time        String
+  clinic      String
+  contact     String?
+  type        String   @default("Demo")
+  stage       String?  @default("Demo Scheduled")
+  notes       String?  @db.Text
+  status      String   @default("Scheduled")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("sales_calendar_events")
+}
+
+model SalesMessage {
+  id        String   @id @default(uuid())
+  sender    String
+  recipient String   @default("Sales Team")
+  text      String   @db.Text
+  timestamp String?
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@map("sales_messages")
+}
+
 
 model Subscription {
   id              String   @id @default(uuid())
@@ -525,4 +644,48 @@ model ClientTag {
 
   @@map("client_tags")
 }
+
+model DataManagementLog {
+  id               String   @id @default(uuid())
+  displayId        String?  @unique
+  type             String
+  fileName         String
+  target           String
+  status           String   @default("Success")
+  recordsProcessed Int      @default(0)
+  errors           Json?
+  timestamp        DateTime @default(now())
+  createdAt        DateTime @default(now())
+
+  @@map("data_management_logs")
+}
+
+model Contact {
+  id                String   @id @default(uuid())
+  displayId         String?  @unique
+  name              String
+  type              String   @default("Other")
+  title             String?
+  occupation        String?
+  company           String?
+  email             String?
+  mobileNumber      String?
+  workPhone         String?
+  secondaryPhone    String?
+  address           String?
+  city              String?
+  state             String?
+  postcode          String?
+  country           String?
+  notes             String?  @db.Text
+  isMedicalReferrer Boolean  @default(false)
+  associatedClients Json?
+  noteLogs          Json?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@map("contacts")
+}
+
+
 
