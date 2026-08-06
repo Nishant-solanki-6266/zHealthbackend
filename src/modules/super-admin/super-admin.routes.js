@@ -45,6 +45,10 @@ router.delete('/compliance-alerts/:id', controller.deleteComplianceAlert)
 router.get('/governance-logs', controller.getGovernanceLogs)
 router.post('/governance-logs', controller.createGovernanceLog)
 
+// Security Controls & Policies
+router.get('/security-controls', controller.getSecurityControls)
+router.put('/security-controls', controller.updateSecurityControls)
+
 // Sales User Management
 router.get('/sales-users', controller.getSalesUsers)
 router.post('/sales-users', controller.createSalesUser)
@@ -88,6 +92,7 @@ router.get('/profile', controller.getProfile)
 router.put('/profile', controller.updateProfile)
 router.get('/settings/templates', controller.getTemplates)
 router.post('/settings/templates', controller.createTemplate)
+router.put('/settings/templates/:type/:id', controller.updateTemplate)
 router.delete('/settings/templates/:type/:id', controller.deleteTemplate)
 router.get('/settings/services', controller.getServices)
 router.post('/settings/services', controller.createService)

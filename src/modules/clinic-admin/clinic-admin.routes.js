@@ -6,6 +6,10 @@ const authorize = require('../../middlewares/role.middleware')
 
 router.use(authenticate, authorize('SUPER_ADMIN', 'CLINIC_ADMIN', 'PRACTITIONER'))
 
+router.get('/dashboard/stats', controller.getDashboardStats)
+router.get('/settings/payment-terms', controller.getPaymentTerms)
+router.put('/settings/payment-terms', controller.updatePaymentTerms)
+
 router.get('/branches', controller.getBranches)
 router.post('/branches', controller.createBranch)
 router.put('/branches/:id', controller.updateBranch)

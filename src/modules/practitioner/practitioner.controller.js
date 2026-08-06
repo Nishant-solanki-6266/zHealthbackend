@@ -779,6 +779,123 @@ module.exports = {
   changePassword,
   getSecuritySettings,
   updateSecuritySettings,
+  getDashboardStats,
+  getConsultations,
+  createConsultation,
+  updateConsultation,
+  deleteConsultation,
+}
+
+// ─── Practitioner: Dashboard Stats ───────────────────────────────────────────
+async function getDashboardStats(req, res, next) {
+  try {
+    const today = new Date()
+    const todayStr = today.toISOString().split('T')[0]
+
+    // Week range
+    const dayOfWeek = today.getDay()
+    const diffToMon = dayOfWeek === 0 ? -6 : 1 - dayOfWeek
+    const weekStart = new Date(today)
+    weekStart.setDate(today.getDate() + diffToMon)
+    const weekEnd = new Date(weekStart)
+    weekEnd.setDate(weekStart.getDate() + 6)
+    const weekStartStr = weekStart.toISOString().split('T')[0]
+    const weekEndStr   = weekEnd.toISOString().split('T')[0]
+
+    // Month range
+    const monthStart = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().split('T')[0]
+    const monthEnd   = new Date(today.getFullYear(), today.getMonth() + 1, 0).toISOString().split('T')[0]
+
+    // Resolve practitioner record for this logged-in user
+    let practitionerFilter = {}
+    if (req.user && req.user.role === 'PRACTITIONER') {
+      const pRecord = await prisma.practitioner.findFirst({
+        where: { OR: [{ userId: req.user.id }, { email: req.user.email }] }
+      })
+      if (pRecord) {
+        practitionerFilter = { practitionerId: pRecord.id }
+      }
+    }
+
+    // ── Appointments ──────────────────────────────────────────────────────────
+    const [todayAppointments, weekAppointments, todayCompleted, todayCancelled, monthTotal] = await Promise.all([
+      prisma.appointment.count({ where: { date: todayStr, ...practitionerFilter } }),
+      prisma.appointment.count({ where: { date: { gte: weekStartStr, lte: weekEndStr }, ...practitionerFilter } }),
+      prisma.appointment.count({ where: { date: todayStr, status: { in: ['Completed', 'Arrived'] }, ...practitionerFilter } }),
+      prisma.appointment.count({ where: { date: todayStr, status: { in: ['Cancelled', 'No Show'] }, ...practitionerFilter } }),
+      prisma.appointment.count({ where: { date: { gte: monthStart, lte: monthEnd }, ...practitionerFilter } }),
+    ])
+
+    const monthCompleted = await prisma.appointment.count({
+      where: { date: { gte: monthStart, lte: monthEnd }, status: { in: ['Completed', 'Arrived'] }, ...practitionerFilter }
+    })
+
+    // ── Patients ──────────────────────────────────────────────────────────────
+    // Get unique patient IDs from this practitioner's appointments
+    const practitionerAppts = await prisma.appointment.findMany({
+      where: { ...practitionerFilter },
+      select: { patientId: true }
+    })
+    const uniquePatientIds = [...new Set(practitionerAppts.map(a => a.patientId).filter(Boolean))]
+    const activePatients = uniquePatientIds.length
+
+    // ── Pending notes (appointments completed but isPaid=false = outstanding notes) ──
+    const pendingNotes = await prisma.appointment.count({
+      where: { status: { in: ['Completed', 'Arrived'] }, isPaid: false, ...practitionerFilter }
+    })
+
+    // ── Payments / Revenue ─────────────────────────────────────────────────────
+    const payments = await prisma.payment.findMany({ select: { amount: true, paymentDate: true, status: true } })
+    const monthRevenue = payments
+      .filter(p => p.status === 'Successful (Paid)' && p.paymentDate >= monthStart && p.paymentDate <= monthEnd)
+      .reduce((s, p) => s + (Number(p.amount) || 0), 0)
+    const totalRevenue = payments
+      .filter(p => p.status === 'Successful (Paid)')
+      .reduce((s, p) => s + (Number(p.amount) || 0), 0)
+
+    // ── Utilisation ────────────────────────────────────────────────────────────
+    const todayTotal = todayAppointments
+    const utilisation = todayTotal > 0 ? Math.round((todayCompleted / todayTotal) * 100) : 0
+    const monthUtilisation = monthTotal > 0 ? Math.round((monthCompleted / monthTotal) * 100) : 0
+
+    // ── Waitlist ───────────────────────────────────────────────────────────────
+    const waitlistCount = await prisma.waitlist.count({ where: { status: 'Waiting' } })
+
+    // ── Appointment trend (last 6 months for this practitioner) ──────────────
+    const allPracAppts = await prisma.appointment.findMany({
+      where: { ...practitionerFilter },
+      select: { date: true }
+    })
+    const activityByMonth = []
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(today.getFullYear(), today.getMonth() - i, 1)
+      const mStart = d.toISOString().split('T')[0]
+      const mEnd = new Date(d.getFullYear(), d.getMonth() + 1, 0).toISOString().split('T')[0]
+      const monthName = d.toLocaleString('default', { month: 'short' })
+      const count = allPracAppts.filter(a => a.date >= mStart && a.date <= mEnd).length
+      activityByMonth.push({ name: monthName, value: count })
+    }
+
+    res.json({
+      success: true,
+      data: {
+        todayAppointments,
+        weekAppointments,
+        todayCompleted,
+        todayCancelled,
+        activePatients,
+        pendingNotes,
+        monthRevenue: parseFloat(monthRevenue.toFixed(2)),
+        totalRevenue: parseFloat(totalRevenue.toFixed(2)),
+        utilisation,
+        monthUtilisation,
+        waitlistCount,
+        activityByMonth,
+      }
+    })
+  } catch (err) {
+    next(err)
+  }
 }
 
 // ─── Body Chart Templates ─────────────────────────────────────────────────────
@@ -877,3 +994,75 @@ async function deleteBodyChartTemplate(req, res, next) {
     next(err)
   }
 }
+
+// ─── Consultations / Clinical Notes ───────────────────────────────────────────
+async function getConsultations(req, res, next) {
+  try {
+    const { patientId, date, status } = req.query
+    const whereClause = {}
+    if (patientId) whereClause.patientId = patientId
+    if (date) whereClause.date = date
+    if (status) whereClause.status = status
+
+    const notes = await prisma.consultationNote.findMany({
+      where: whereClause,
+      orderBy: { createdAt: 'desc' }
+    })
+    res.json({ success: true, data: notes })
+  } catch (err) {
+    next(err)
+  }
+}
+
+async function createConsultation(req, res, next) {
+  try {
+    const { patientId, patientName, notes, soap, status, date, practitionerName, profession, appointmentId } = req.body
+    const newNote = await prisma.consultationNote.create({
+      data: {
+        displayId: `CN-${Date.now().toString().slice(-6)}`,
+        patientId: patientId || null,
+        patientName: patientName || 'Unknown Patient',
+        practitionerName: practitionerName || 'Dr. Sarah Jenkins',
+        profession: profession || 'Physiotherapist',
+        appointmentId: appointmentId || null,
+        notes: notes || null,
+        soap: soap || null,
+        status: status || 'Draft',
+        date: date || new Date().toISOString().split('T')[0]
+      }
+    })
+    res.status(201).json({ success: true, data: newNote })
+  } catch (err) {
+    next(err)
+  }
+}
+
+async function updateConsultation(req, res, next) {
+  try {
+    const { id } = req.params
+    const { notes, soap, status, date } = req.body
+    const updated = await prisma.consultationNote.update({
+      where: { id },
+      data: {
+        ...(notes !== undefined && { notes }),
+        ...(soap !== undefined && { soap }),
+        ...(status !== undefined && { status }),
+        ...(date !== undefined && { date })
+      }
+    })
+    res.json({ success: true, data: updated })
+  } catch (err) {
+    next(err)
+  }
+}
+
+async function deleteConsultation(req, res, next) {
+  try {
+    const { id } = req.params
+    await prisma.consultationNote.delete({ where: { id } })
+    res.json({ success: true, message: 'Consultation note deleted' })
+  } catch (err) {
+    next(err)
+  }
+}
+

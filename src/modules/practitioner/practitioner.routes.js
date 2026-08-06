@@ -6,6 +6,13 @@ const authorize = require('../../middlewares/role.middleware')
 
 router.use(authenticate, authorize('SUPER_ADMIN', 'CLINIC_ADMIN', 'PRACTITIONER'))
 
+router.get('/dashboard/stats', controller.getDashboardStats)
+
+router.get('/consultations', controller.getConsultations)
+router.post('/consultations', controller.createConsultation)
+router.put('/consultations/:id', controller.updateConsultation)
+router.delete('/consultations/:id', controller.deleteConsultation)
+
 router.get('/appointments', controller.getAppointments)
 router.post('/appointments', controller.createAppointment)
 router.put('/appointments/:id', controller.updateAppointment)

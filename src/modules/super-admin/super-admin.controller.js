@@ -30,9 +30,9 @@ const getClinics = async (req, res, next) => {
 // Super Admin: Create clinic
 const createClinic = async (req, res, next) => {
   try {
-    const { 
-      name, email, phone, contact, address, country, state, logoUrl, avatar, 
-      contactPerson, website, salesperson, referral, staffCount, patientsCount, revenue, tier, status 
+    const {
+      name, email, phone, contact, address, country, state, logoUrl, avatar,
+      contactPerson, website, salesperson, referral, staffCount, patientsCount, revenue, tier, status
     } = req.body
 
     const fullAddress = address || (state || country ? `${state || ''} ${country || ''}`.trim() : null)
@@ -127,11 +127,11 @@ const createSubscription = async (req, res, next) => {
 const updateSubscription = async (req, res, next) => {
   try {
     const { id } = req.params
-    const { name, price, plan, amount, status, billingCycle } = req.body
+    const { name, price, plan, amount, status, billingCycle, clinicName } = req.body
     const data = {}
     if (plan || name) data.plan = plan || name
     if (clinicName) data.clinicName = clinicName
-    if (amount || price !== undefined) data.amount = parseFloat(amount || price)
+    if (amount !== undefined || price !== undefined) data.amount = parseFloat(amount !== undefined ? amount : price)
     if (status) data.status = status
     if (billingCycle) data.billingCycle = billingCycle
 
@@ -262,7 +262,19 @@ const getAuditLogs = async (req, res, next) => {
       logs = await prisma.auditLog.findMany({ orderBy: { timestamp: 'desc' } })
     }
 
-    res.json({ success: true, data: logs })
+    const formattedLogs = logs.map(log => {
+      let target = log.target
+      if (target) {
+        target = target.replace(/\s*\([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\)/gi, '')
+        target = target.replace(/\s*\([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\)/gi, '')
+      }
+      return {
+        ...log,
+        target: target || 'Platform Wide'
+      }
+    })
+
+    res.json({ success: true, data: formattedLogs })
   } catch (err) {
     next(err)
   }
@@ -297,13 +309,13 @@ const createAuditLog = async (req, res, next) => {
 const updateClinic = async (req, res, next) => {
   try {
     const { id } = req.params
-    const { 
-      name, email, phone, contact, address, country, state, logoUrl, avatar, 
-      contactPerson, website, salesperson, referral, staffCount, patientsCount, revenue, tier, status 
+    const {
+      name, email, phone, contact, address, country, state, logoUrl, avatar,
+      contactPerson, website, salesperson, referral, staffCount, patientsCount, revenue, tier, status
     } = req.body
-    
+
     const fullAddress = address || (state || country ? `${state || ''} ${country || ''}`.trim() : undefined)
-    
+
     const clinic = await prisma.clinic.update({
       where: { id },
       data: {
@@ -325,6 +337,18 @@ const updateClinic = async (req, res, next) => {
         ...(status && { status }),
       },
     })
+
+    // Sync updated name/contactPerson to matching user in users table
+    if (clinic.email) {
+      const syncName = contactPerson || (name ? `${name} Admin` : null)
+      if (syncName) {
+        await prisma.user.updateMany({
+          where: { email: clinic.email.toLowerCase() },
+          data: { name: syncName }
+        }).catch(() => null)
+      }
+    }
+
     res.json({ success: true, data: clinic })
   } catch (err) {
     next(err)
@@ -375,14 +399,46 @@ const getAdmins = async (req, res, next) => {
       }
     })
 
+    const clinics = await prisma.clinic.findMany().catch(() => [])
+
     const formatted = users.map(u => {
       let clinicName = 'ZealthOS Platform'
-      if (u.userBranches && u.userBranches.length > 0 && u.userBranches[0].branch) {
+      let displayName = u.name
+      let subscriptionTier = 'Basic'
+      let clinicAddress = 'Main Medical Center'
+
+      // Match clinic by email
+      const matchedClinic = clinics.find(c => c.email && c.email.toLowerCase() === u.email.toLowerCase())
+      if (matchedClinic) {
+        clinicName = matchedClinic.name
+        if (matchedClinic.tier) {
+          subscriptionTier = matchedClinic.tier
+        }
+        if (matchedClinic.address) {
+          clinicAddress = matchedClinic.address
+        }
+        if (matchedClinic.contactPerson && (u.role === 'CLINIC_ADMIN' || u.role === 'SUPER_ADMIN')) {
+          displayName = matchedClinic.contactPerson
+        }
+      } else if (u.userBranches && u.userBranches.length > 0 && u.userBranches[0].branch) {
         clinicName = u.userBranches[0].branch.name || 'ZealthOS Platform'
+        if (u.userBranches[0].branch.address) {
+          clinicAddress = u.userBranches[0].branch.address
+        }
       }
+
+      const joinedDate = u.createdAt ? new Date(u.createdAt).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }) : 'Jan 01, 2026'
+      const joinedTime = u.updatedAt ? new Date(u.updatedAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) + ', ' + new Date(u.updatedAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) : '1 Jan 2026, 12:00'
+
       return {
         ...u,
-        clinic: clinicName
+        name: displayName,
+        clinic: clinicName,
+        subscription: subscriptionTier,
+        tier: subscriptionTier,
+        address: clinicAddress,
+        joined: joinedDate,
+        lastLogin: joinedTime,
       }
     })
 
@@ -447,10 +503,16 @@ const updateAdmin = async (req, res, next) => {
 
     const data = {}
     if (name) data.name = name
-    if (email) data.email = email
+    if (email) data.email = email.toLowerCase()
     if (phone !== undefined) data.phone = phone
     if (role) {
-      data.role = (role === 'ClinicAdmin' || role === 'Clinic Admin' || role === 'CLINIC_ADMIN') ? 'CLINIC_ADMIN' : 'SUPER_ADMIN'
+      if (role === 'ClinicAdmin' || role === 'Clinic Admin' || role === 'CLINIC_ADMIN') {
+        data.role = 'CLINIC_ADMIN'
+      } else if (role === 'Admin' || role === 'Super Admin' || role === 'SUPER_ADMIN') {
+        data.role = 'SUPER_ADMIN'
+      } else if (role === 'Doctor' || role === 'PRACTITIONER') {
+        data.role = 'PRACTITIONER'
+      }
     }
     if (status) data.status = status === 'Suspended' ? 'SUSPENDED' : status === 'Inactive' ? 'INACTIVE' : 'ACTIVE'
     if (password) {
@@ -458,10 +520,30 @@ const updateAdmin = async (req, res, next) => {
       data.passwordHash = await bcrypt.hash(password, salt)
     }
 
+    // Get current user email before update to match clinic table
+    const existingUser = await prisma.user.findUnique({ where: { id } })
+
     const updatedAdmin = await prisma.user.update({
       where: { id },
       data,
     })
+
+    // Synchronize changes to linked clinic table (contactPerson, email, phone, status)
+    const targetEmail = existingUser?.email || updatedAdmin.email
+    if (targetEmail) {
+      const clinicUpdate = {}
+      if (name) clinicUpdate.contactPerson = name
+      if (email) clinicUpdate.email = email.toLowerCase()
+      if (phone !== undefined) clinicUpdate.phone = phone
+      if (status) clinicUpdate.status = status === 'Suspended' || status === 'SUSPENDED' ? 'Suspended' : status === 'Inactive' || status === 'INACTIVE' ? 'Inactive' : 'Active'
+
+      if (Object.keys(clinicUpdate).length > 0) {
+        await prisma.clinic.updateMany({
+          where: { email: targetEmail.toLowerCase() },
+          data: clinicUpdate
+        }).catch(() => null)
+      }
+    }
 
     res.json({ success: true, data: updatedAdmin })
   } catch (err) {
@@ -1203,6 +1285,37 @@ const getPlatformAnalytics = async (req, res, next) => {
       churned: idx % 3 === 0 ? 1 : 0
     }))
 
+    const totalPractitionersCount = await prisma.practitioner.count().catch(() => 0)
+    const totalPatientsCount = await prisma.patient.count().catch(() => 0)
+    const activeSubscriptionsCount = await prisma.subscription.count({ where: { status: 'Active' } }).catch(() => 0)
+
+    // Real Live MySQL Database Health Ping
+    const dbStartTime = Date.now()
+    let dbStatus = 'Operational'
+    let dbLatency = '15ms'
+    try {
+      await prisma.$queryRaw`SELECT 1`
+      dbLatency = `${Date.now() - dbStartTime}ms`
+    } catch (dbPingErr) {
+      dbStatus = 'Degraded'
+      dbLatency = '—'
+    }
+
+    const systemHealth = [
+      // Placeholder: Core API (static UI placeholder until APM gateway monitoring is integrated)
+      { name: 'Core API', status: 'Operational', color: 'text-emerald-500 bg-emerald-500/10', uptime: '99.88%', latency: '142ms (us-east-1)', desc: 'REST & GraphQL gateway', isStaticPlaceholder: true },
+      // Placeholder: Web App (static UI placeholder until RUM monitoring is integrated)
+      { name: 'Web App', status: 'Operational', color: 'text-emerald-500 bg-emerald-500/10', uptime: '99.91%', latency: '280ms (global)', desc: 'Owner Dashboard and client portal', isStaticPlaceholder: true },
+      // Placeholder: Mobile App (static UI placeholder until mobile APM is integrated)
+      { name: 'Mobile App', status: 'Degraded', color: 'text-amber-500 bg-amber-500/10', uptime: '95.30%', latency: '410ms (global)', desc: 'iOS & Android clinician app', isStaticPlaceholder: true },
+      // Real Live MySQL Database Health Ping
+      { name: 'Primary Database', status: dbStatus, color: dbStatus === 'Operational' ? 'text-emerald-500 bg-emerald-500/10' : 'text-rose-500 bg-rose-500/10', uptime: '100.00%', latency: `${dbLatency} (MySQL)`, desc: 'MySQL Database Cluster (Prisma ORM)', isLive: true },
+      // Placeholder: AI Inference (static UI placeholder until AI provider status API is integrated)
+      { name: 'AI Inference', status: 'Operational', color: 'text-emerald-500 bg-emerald-500/10', uptime: '99.92%', latency: '1670ms (asia-east-1)', desc: 'Hosted models serving', isStaticPlaceholder: true },
+      // Placeholder: Billing Jobs (static UI placeholder until BullMQ queue worker is integrated)
+      { name: 'Billing jobs', status: 'Maintenance', color: 'text-blue-500 bg-blue-500/10', uptime: '99.60%', latency: '— (us-east-1)', desc: 'Nightly invoice + subscription workers', isStaticPlaceholder: true }
+    ]
+
     res.json({
       success: true,
       data: {
@@ -1210,11 +1323,16 @@ const getPlatformAnalytics = async (req, res, next) => {
         arr,
         revenueGrowth: 183.2,
         totalYtd,
+        totalClinicsCount: clinics.length,
+        totalPractitionersCount,
+        totalPatientsCount,
+        activeSubscriptionsCount,
         trendData,
         tierData,
         regionData,
         customerGrowthData,
-        billingInvoices: invoices
+        billingInvoices: invoices,
+        systemHealth
       }
     })
   } catch (err) {
@@ -1427,7 +1545,7 @@ const updateClinicFeatures = async (req, res, next) => {
   }
 }
 
-// Super Admin: Reset clinic password
+// Super Admin: Reset / Set Clinic Admin Password (Create user if not exists)
 const resetClinicPassword = async (req, res, next) => {
   try {
     const bcrypt = require('bcryptjs')
@@ -1440,15 +1558,33 @@ const resetClinicPassword = async (req, res, next) => {
 
     const clinic = await prisma.clinic.findUnique({ where: { id } })
     if (!clinic) return res.status(404).json({ success: false, message: 'Clinic not found' })
+    if (!clinic.email) return res.status(400).json({ success: false, message: 'Clinic has no email. Please update clinic email first.' })
 
     const hashedPassword = await bcrypt.hash(newPassword, 10)
-    
-    // Update user if matching email exists
-    if (clinic.email) {
-      await prisma.user.updateMany({
-        where: { email: clinic.email },
-        data: { passwordHash: hashedPassword }
-      }).catch(() => null)
+
+    // Check if user exists with this clinic email
+    const existingUser = await prisma.user.findUnique({ where: { email: clinic.email.toLowerCase() } })
+
+    if (existingUser) {
+      // User exists - update password and activate
+      await prisma.user.update({
+        where: { id: existingUser.id },
+        data: { passwordHash: hashedPassword, status: 'ACTIVE' }
+      })
+    } else {
+      // User does NOT exist - create new CLINIC_ADMIN account
+      const displayId = await generateDisplayId('user', 'ADM')
+      await prisma.user.create({
+        data: {
+          displayId,
+          name: clinic.contactPerson || clinic.name + ' Admin',
+          email: clinic.email.toLowerCase(),
+          passwordHash: hashedPassword,
+          phone: clinic.phone || null,
+          role: 'CLINIC_ADMIN',
+          status: 'ACTIVE'
+        }
+      })
     }
 
     const count = await prisma.auditLog.count()
@@ -1672,16 +1808,55 @@ const createTemplate = async (req, res, next) => {
   }
 }
 
+// Super Admin: Update Template
+const updateTemplate = async (req, res, next) => {
+  try {
+    const { type, id } = req.params
+    const { name, category, content, status } = req.body
+    let updated
+    if (type === 'BODY_CHART' || type === 'body_chart' || type === 'form' || type === 'forms') {
+      updated = await prisma.formTemplate.update({
+        where: { id },
+        data: {
+          ...(name && { name: name.trim() }),
+          ...(category && { category }),
+          lastModified: new Date().toISOString().split('T')[0]
+        }
+      }).catch(() => { })
+    } else if (type === 'letter' || type === 'letters') {
+      updated = await prisma.letterTemplate.update({
+        where: { id },
+        data: {
+          ...(name && { name: name.trim() }),
+          ...(category && { category }),
+          ...(status && { status })
+        }
+      }).catch(() => { })
+    } else {
+      updated = await prisma.noteTemplate.update({
+        where: { id },
+        data: {
+          ...(name && { name: name.trim() }),
+          ...(content !== undefined && { content })
+        }
+      }).catch(() => { })
+    }
+    res.json({ success: true, message: 'Template updated successfully', data: updated })
+  } catch (err) {
+    next(err)
+  }
+}
+
 // Super Admin: Delete Template
 const deleteTemplate = async (req, res, next) => {
   try {
     const { type, id } = req.params
     if (type === 'BODY_CHART' || type === 'body_chart' || type === 'form' || type === 'forms') {
-      await prisma.formTemplate.delete({ where: { id } }).catch(() => {})
+      await prisma.formTemplate.delete({ where: { id } }).catch(() => { })
     } else if (type === 'letter' || type === 'letters') {
-      await prisma.letterTemplate.delete({ where: { id } }).catch(() => {})
+      await prisma.letterTemplate.delete({ where: { id } }).catch(() => { })
     } else {
-      await prisma.noteTemplate.delete({ where: { id } }).catch(() => {})
+      await prisma.noteTemplate.delete({ where: { id } }).catch(() => { })
     }
     res.json({ success: true, message: 'Template deleted successfully' })
   } catch (err) {
@@ -2130,10 +2305,10 @@ const revokeSession = async (req, res, next) => {
         where: { id },
         data: { severity: 'Revoked', details: 'Session revoked by admin' }
       }).catch(async () => {
-        await prisma.auditLog.delete({ where: { id } }).catch(() => {})
+        await prisma.auditLog.delete({ where: { id } }).catch(() => { })
       })
     } else {
-      await prisma.refreshToken.delete({ where: { id } }).catch(() => {})
+      await prisma.refreshToken.delete({ where: { id } }).catch(() => { })
     }
 
     await prisma.auditLog.create({
@@ -2144,7 +2319,7 @@ const revokeSession = async (req, res, next) => {
         role: req.user?.role || 'SUPER_ADMIN',
         details: `Revoked session ${id}`
       }
-    }).catch(() => {})
+    }).catch(() => { })
 
     res.json({ success: true, message: 'Device session revoked successfully!' })
   } catch (err) {
@@ -2199,7 +2374,7 @@ const changePassword = async (req, res, next) => {
         userRole: user.role,
         details: 'Super Admin password changed successfully'
       }
-    }).catch(() => {})
+    }).catch(() => { })
 
     res.json({ success: true, message: 'Password updated & saved to live database!' })
   } catch (err) {
@@ -2257,6 +2432,59 @@ const getLoginHistory = async (req, res, next) => {
     }
 
     res.json({ success: true, data: formattedLogs })
+  } catch (err) {
+    next(err)
+  }
+}
+
+// Super Admin: Get Security Controls
+const getSecurityControls = async (req, res, next) => {
+  try {
+    let setting = await prisma.systemSetting.findUnique({ where: { key: 'security_controls' } })
+    if (!setting) {
+      setting = await prisma.systemSetting.create({
+        data: {
+          key: 'security_controls',
+          value: { enforceMfa: true, encryptRest: true, autoLogout: false }
+        }
+      })
+    }
+    res.json({ success: true, data: setting.value })
+  } catch (err) {
+    next(err)
+  }
+}
+
+// Super Admin: Update Security Controls
+const updateSecurityControls = async (req, res, next) => {
+  try {
+    const { enforceMfa, encryptRest, autoLogout } = req.body
+    const setting = await prisma.systemSetting.upsert({
+      where: { key: 'security_controls' },
+      update: {
+        value: { enforceMfa: !!enforceMfa, encryptRest: !!encryptRest, autoLogout: !!autoLogout }
+      },
+      create: {
+        key: 'security_controls',
+        value: { enforceMfa: !!enforceMfa, encryptRest: !!encryptRest, autoLogout: !!autoLogout }
+      }
+    })
+
+    // Log security control update in Audit Log
+    const count = await prisma.auditLog.count()
+    await prisma.auditLog.create({
+      data: {
+        displayId: `AUD-${String(count + 1).padStart(6, '0')}`,
+        category: 'Permissions',
+        action: 'Updated System Security Controls & Policies',
+        actor: req.user?.name || 'Super Admin',
+        role: req.user?.role || 'SUPER_ADMIN',
+        target: 'Platform Wide',
+        severity: 'Warning'
+      }
+    }).catch(() => null)
+
+    res.json({ success: true, data: setting.value })
   } catch (err) {
     next(err)
   }
@@ -2327,6 +2555,7 @@ module.exports = {
   updateProfile,
   getTemplates,
   createTemplate,
+  updateTemplate,
   deleteTemplate,
   getServices,
   createService,
@@ -2346,5 +2575,7 @@ module.exports = {
   revokeSession,
   changePassword,
   getLoginHistory,
+  getSecurityControls,
+  updateSecurityControls
 }
 
