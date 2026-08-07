@@ -907,3 +907,17 @@ model ConsultationNote {
 
 
 
+
+model CareTeamMessage {
+  id             String   @id @default(uuid())
+  practitionerId String?
+  patientId      String?
+  sender         String   // 'patient' | 'doctor' | 'reception' | 'billing' | 'support'
+  doctorName     String?
+  text           String   @db.Text
+  category       String   @default("General Questions")
+  isRead         Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  @@map("care_team_messages")
+}

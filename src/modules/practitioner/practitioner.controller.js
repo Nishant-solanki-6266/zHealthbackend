@@ -639,16 +639,12 @@ const changePassword = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'New password must be at least 6 characters long.' })
     }
 
-    const userId = req.user?.id
     let user = null
-    if (userId) {
-      user = await prisma.user.findUnique({ where: { id: userId } }).catch(() => null)
-    }
-    if (!user && req.user?.email) {
-      user = await prisma.user.findFirst({ where: { email: req.user.email } }).catch(() => null)
-    }
-    if (!user) {
-      user = await prisma.user.findFirst({ where: { role: 'PRACTITIONER' } }).catch(() => null)
+    if (req.user?.role === 'PRACTITIONER') {
+      user = await prisma.user.findUnique({ where: { id: req.user.id } }).catch(() => null)
+    } else {
+      // Dummy role fallback - force finding the practitioner
+      user = await prisma.user.findFirst({ where: { role: 'PRACTITIONER' }, orderBy: { createdAt: 'desc' } }).catch(() => null)
     }
 
     if (!user) {

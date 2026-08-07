@@ -298,8 +298,27 @@ const createPractitioner = async (req, res, next) => {
     }
 
     const today = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+    
+    // Check if user already exists
+    let user = await prisma.user.findUnique({ where: { email } })
+    if (!user) {
+      const bcrypt = require('bcryptjs')
+      const salt = await bcrypt.genSalt(10)
+      const passwordHash = await bcrypt.hash('password123', salt) // Default password
+      user = await prisma.user.create({
+        data: {
+          email,
+          name,
+          passwordHash,
+          role: 'PRACTITIONER',
+          status: 'ACTIVE'
+        }
+      })
+    }
+
     const p = await prisma.practitioner.create({
       data: {
+        userId: user.id, // Link to the user account so they can login
         clinicId: clinicId || null,
         name,
         specialty: specialty || 'Physiotherapist',

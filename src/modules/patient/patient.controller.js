@@ -173,10 +173,12 @@ const updatePatientProfile = async (req, res, next) => {
               ...(targetCountry !== undefined && { country: targetCountry })
             }
 
-            await tx.user.update({
-              where: { id: patient.userId },
-              data: userUpdatePayload
-            })
+            if (currentUser.role === 'PATIENT') {
+              await tx.user.update({
+                where: { id: patient.userId },
+                data: userUpdatePayload
+              })
+            }
           }
 
           const patientUpdatePayload = {}
@@ -354,13 +356,46 @@ const getCareTeam = async (req, res, next) => {
   }
 }
 
+const getCareTeamMessages = async (req, res, next) => {
+  try {
+    const userId = req.user.id
+    const user = await prisma.user.findUnique({ where: { id: userId }, include: { patient: true } })
+    const patientId = user?.patient?.id
+
+    const messages = await prisma.careTeamMessage.findMany({
+      where: {
+        patientId: patientId
+      },
+      orderBy: { createdAt: 'asc' }
+    })
+    res.json({ success: true, data: messages })
+  } catch (err) {
+    next(err)
+  }
+}
+
 const sendCareTeamMessage = async (req, res, next) => {
   try {
-    const { practitionerId, doctorName, messageText } = req.body
+    const { practitionerId, doctorName, messageText, category } = req.body
+    
+    const userId = req.user.id
+    const user = await prisma.user.findUnique({ where: { id: userId }, include: { patient: true } })
+    
+    const newMessage = await prisma.careTeamMessage.create({
+      data: {
+        practitionerId: practitionerId || null,
+        patientId: user?.patient?.id || null,
+        sender: 'patient',
+        doctorName: doctorName || 'Practitioner',
+        text: messageText,
+        category: category || 'Treatment Questions'
+      }
+    })
+
     res.json({
       success: true,
       message: `Secure message delivered to ${doctorName || 'Practitioner'}`,
-      data: { practitionerId, messageText, sentAt: new Date() }
+      data: newMessage
     })
   } catch (err) {
     next(err)
@@ -369,37 +404,9 @@ const sendCareTeamMessage = async (req, res, next) => {
 
 // --- Treatment Plans & Prescribed Exercises ---
 
-let inMemoryTreatmentPlans = [
-  {
-    id: 'tp_1',
-    displayId: 'TP-000001',
-    condition: 'Chronic Lumbar Spinal Strain & Discogenic Lower Back Pain',
-    practitioner: 'Dr. Sarah Jenkins (Physiotherapist)',
-    stage: 'Phase 2: Lumbar Mobilisation & Spinal Stabilization',
-    overallProgress: 65,
-    status: 'Active',
-    goals: [
-      { id: 'g1', title: 'Walk Pain Free (distance > 2km)', percent: 70, status: 'Active' },
-      { id: 'g2', title: 'Return To Work (lift limits up to 15kg)', percent: 50, status: 'Active' },
-      { id: 'g3', title: 'Improve Core Stability (plank hold > 60s)', percent: 80, status: 'Active' }
-    ],
-    timeline: [
-      { id: 't1', label: 'Initial Assessment & Intake', date: '02 Jan 2026', desc: 'Baseline lumbar ROM mapped. NDIS funding plan registered.', status: 'Completed' },
-      { id: 't2', label: 'Phase 1: Acute Relief & Stretching', date: '25 Feb 2026', desc: 'Lumbar stretching extensions. Focus on reducing acute nerve inflammation.', status: 'Completed' },
-      { id: 't3', label: 'Progress Review & Exercise Routine update', date: '18 May 2026', desc: 'Marked calf raises and ankle eccentric stretching adjustments.', status: 'Completed' },
-      { id: 't4', label: 'Phase 2: Stabilization & Core Loading', date: 'Current Phase', desc: 'Cat-Cow mobility, dead bug holds, and spinal loading drills.', status: 'Active' },
-      { id: 't5', label: 'Milestone: Functional Capacity Evaluation', date: 'Expected: 22 Jul 2026', desc: 'Comprehensive NDIS goal compliance checks and clinical reporting.', status: 'Pending' },
-      { id: 't6', label: 'Discharge Target', date: 'Expected: 30 Aug 2026', desc: 'Self-management care transition program.', status: 'Pending' }
-    ]
-  }
-]
+let inMemoryTreatmentPlans = []
 
-let inMemoryExercises = [
-  { id: '1', name: 'Double leg calf raises', reps: '3 sets of 15 reps', note: 'Rest 60 seconds between sets.', done: true, img: 'https://images.unsplash.com/photo-1571019614242-c5c5dee9f50b?auto=format&fit=crop&q=80&w=200' },
-  { id: '2', name: 'Lumbar stretching extensions', reps: 'Hold 30 secs, 5 reps', note: 'Stretch gently. Stop immediately if pain spikes.', done: true, img: 'https://images.unsplash.com/photo-1544367567-0f2fcb009e0b?auto=format&fit=crop&q=80&w=200' },
-  { id: '3', name: 'Hamstring eccentric stretches', reps: '3 sets of 10 reps', note: 'Keep knees straight. Lean forward slowly.', done: false, img: 'https://images.unsplash.com/photo-1599058917212-d750089bc07e?auto=format&fit=crop&q=80&w=200' },
-  { id: '4', name: 'Ankle resistance bands flexion', reps: '3 sets of 12 reps', note: 'Use purple resistance band.', done: false, img: 'https://images.unsplash.com/photo-1583454110551-21f2fa2afe61?auto=format&fit=crop&q=80&w=200' },
-]
+let inMemoryExercises = []
 
 const getTreatmentPlans = async (req, res, next) => {
   try {
@@ -706,21 +713,9 @@ const deletePrescribedExercise = async (req, res, next) => {
 
 // --- Visual Progress & Clinical Outcomes ---
 
-let inMemoryOutcomesData = [
-  { id: 'tr_1', month: 'Jan', pain: 8, function: 30, mobility: 40 },
-  { id: 'tr_2', month: 'Feb', pain: 7, function: 45, mobility: 55 },
-  { id: 'tr_3', month: 'Mar', pain: 6, function: 60, mobility: 68 },
-  { id: 'tr_4', month: 'Apr', pain: 4, function: 75, mobility: 78 },
-  { id: 'tr_5', month: 'May', pain: 3, function: 82, mobility: 85 },
-  { id: 'tr_6', month: 'Jun', pain: 2, function: 90, mobility: 92 }
-]
+let inMemoryOutcomesData = []
 
-let inMemoryOutcomeMeasures = [
-  { id: 'om_1', name: 'Oswestry Disability Index (ODI)', score: '18% (Minimal Disability)', prevScore: '36% (Moderate Disability)', type: 'Lumbar Spine', status: 'Improved', verifiedBy: 'Dr. Sarah Jenkins', verifiedAt: '2026-06-01' },
-  { id: 'om_2', name: 'LEFS (Lower Extremity Functional Scale)', score: '68 / 80 (Good)', prevScore: '42 / 80 (Poor)', type: 'Lower Limb', status: 'Improved', verifiedBy: 'Dr. Sarah Jenkins', verifiedAt: '2026-06-01' },
-  { id: 'om_3', name: 'DASH (Disabilities of Arm, Shoulder & Hand)', score: '—', prevScore: '—', type: 'Upper Limb', status: 'Not Tracked' },
-  { id: 'om_4', name: 'Neck Disability Index (NDI)', score: '—', prevScore: '—', type: 'Cervical Spine', status: 'Not Tracked' }
-]
+let inMemoryOutcomeMeasures = []
 
 const getProgressOutcomes = async (req, res, next) => {
   try {
@@ -1003,19 +998,9 @@ const deleteProgressTrend = async (req, res, next) => {
 
 // --- Forms & Documents Center ---
 
-let inMemoryForms = [
-  { id: 'f_1', name: 'ZealthOS Clinical Intake & Medical History Form', category: 'Intake', status: 'Pending' },
-  { id: 'f_2', name: 'General Patient Consent & Treatment Acknowledgment', category: 'Consent', status: 'Completed' },
-  { id: 'f_3', name: 'NDIS Plan Participant Details & Service Agreement Form', category: 'NDIS', status: 'Pending' },
-  { id: 'f_4', name: 'ODI (Oswestry Disability Index) Questionnaire', category: 'Outcome Measures', status: 'Completed' }
-]
+let inMemoryForms = []
 
-let inMemoryDocuments = [
-  { id: 'doc_1', name: 'NDIS_Functional_Assessment_Sarah_Jenkins.pdf', type: 'Clinical Report', date: '08 Jun 2026', size: '2.4 MB' },
-  { id: 'doc_2', name: 'GP_Referral_Letter_Arthur_Conan.pdf', type: 'Referral', date: '02 Jan 2026', size: '1.2 MB' },
-  { id: 'doc_3', name: 'Lumbar_MRI_Scan_Report_Southside.pdf', type: 'Imaging', date: '12 Apr 2026', size: '3.8 MB' },
-  { id: 'doc_4', name: 'Medical_Certificate_Low_Back_Strain.pdf', type: 'Medical Certificate', date: '14 May 2026', size: '420 KB' }
-]
+let inMemoryDocuments = []
 
 const getFormsAndDocuments = async (req, res, next) => {
   try {
@@ -1209,22 +1194,11 @@ const deletePatientDocument = async (req, res, next) => {
 
 // --- Funding, NDIS & Claims Accounts ---
 
-let inMemoryFundingAccounts = [
-  { id: 'fa_1', type: 'NDIS Participant Care Plan', remaining: '$7,400.00', percent: 65, status: 'Active', used: '$3,985.00', total: '$11,385.00', expiry: '31 Dec 2026' },
-  { id: 'fa_2', type: 'Medicare EPC Program', remaining: '2 sessions', percent: 40, status: 'Low Sessions', used: '3 of 5 sessions', total: '5 sessions', expiry: '14 Nov 2026' }
-]
+let inMemoryFundingAccounts = []
 
-let inMemoryAlerts = [
-  { id: 'al_1', type: 'Low Sessions Alert', text: 'Medicare EPC funding runs low (2 sessions remaining). GP plan review required.', color: 'warning' },
-  { id: 'al_2', type: 'Plan Review Alert', text: 'NDIS plan evaluation scheduled with Care Team practitioners on 18 Jun.', color: 'info' }
-]
+let inMemoryAlerts = []
 
-let inMemoryClaimsHistory = [
-  { id: 'clm_1', service: 'Initial Physiotherapy Assessment', date: '02 Jan 2026', amount: '$180.00', funding: 'NDIS', status: 'Approved' },
-  { id: 'clm_2', service: 'Lumbar Spine Rehabilitation Exercise', date: '14 May 2026', amount: '$120.00', funding: 'NDIS', status: 'Approved' },
-  { id: 'clm_3', service: 'Speech Pathology consultation', date: '04 Jun 2026', amount: '$150.00', funding: 'EPC', status: 'Approved' },
-  { id: 'clm_4', service: 'Active Core Mobilisation', date: '12 Jun 2026', amount: '$120.00', funding: 'NDIS', status: 'Processing' }
-]
+let inMemoryClaimsHistory = []
 
 const getFundingAndClaims = async (req, res, next) => {
   try {
@@ -1488,14 +1462,9 @@ const updateFundingAccount = async (req, res, next) => {
 
 // --- Health Record Sharing ---
 
-let inMemoryActiveShares = [
-  { id: 'hs_1', clinic: 'Melbourne Allied Health', practitioner: 'Dr. Sarah Jenkins', level: 'Full Access', status: 'Active', grantedDate: '12 Jan 2026' },
-  { id: 'hs_2', clinic: 'Sydney Allied Hub', practitioner: 'Dr. Emily Smith', level: 'Limited Access', status: 'Active', grantedDate: '04 Mar 2026' }
-]
+let inMemoryActiveShares = []
 
-let inMemoryPendingShareRequests = [
-  { id: 'req_1', clinic: 'ABC Physiotherapy Care', practitioner: 'John Smith', level: 'Limited Access', status: 'Pending', grantedDate: 'Just now' }
-]
+let inMemoryPendingShareRequests = []
 
 const getHealthShares = async (req, res, next) => {
   try {
@@ -1688,12 +1657,7 @@ const revokeHealthShare = async (req, res, next) => {
 
 // --- Patient Invoices ---
 
-let inMemoryPatientInvoices = [
-  { id: 'INV-1829', service: 'MSK Review Consultation', practitioner: 'Dr. Sarah Jenkins', amount: 120.00, status: 'Unpaid', due: '19 Jun 2026' },
-  { id: 'INV-1712', service: 'Hydrotherapy Session Assessment', practitioner: 'Dr. Emily Smith', amount: 150.00, status: 'Paid', due: '04 Jun 2026' },
-  { id: 'INV-1502', service: 'Initial Physiotherapy Assessment', practitioner: 'Dr. Sarah Jenkins', amount: 180.00, status: 'Paid', due: '02 Jan 2026' },
-  { id: 'INV-1405', service: 'OT Assessment Session', practitioner: 'Dr. James Carter', amount: 190.00, status: 'Overdue', due: '10 May 2026' }
-]
+let inMemoryPatientInvoices = []
 
 const getPatientInvoices = async (req, res, next) => {
   try {
@@ -2100,6 +2064,7 @@ module.exports = {
   cancelAppointment,
   getPractitioners,
   getCareTeam,
+  getCareTeamMessages,
   sendCareTeamMessage,
   getPatientInvoices,
   getTreatmentPlans,
