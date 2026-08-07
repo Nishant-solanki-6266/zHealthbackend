@@ -457,36 +457,61 @@ const createAdmin = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Name and Email are required' })
     }
 
-    const existingUser = await prisma.user.findUnique({ where: { email } })
+    const lowerEmail = email.toLowerCase().trim()
+    const existingUser = await prisma.user.findUnique({ where: { email: lowerEmail } })
     if (existingUser) {
       return res.status(400).json({ success: false, message: 'User with this email already exists' })
     }
 
     const salt = await bcrypt.genSalt(10)
-    const passwordHash = await bcrypt.hash(password || 'AdminPass123!', salt)
+    const passwordHash = await bcrypt.hash(password || '12345678', salt)
 
     let userRole = 'SUPER_ADMIN'
     if (role === 'ClinicAdmin' || role === 'Clinic Admin' || role === 'CLINIC_ADMIN') {
       userRole = 'CLINIC_ADMIN'
+    } else if (role === 'Salesperson' || role === 'Sales Executive' || role === 'SALES_EXECUTIVE' || role === 'sales') {
+      userRole = 'SALES_EXECUTIVE'
     } else {
       userRole = 'SUPER_ADMIN'
     }
 
     const userStatus = status === 'Suspended' ? 'SUSPENDED' : status === 'Inactive' ? 'INACTIVE' : 'ACTIVE'
-    const prefix = userRole === 'SUPER_ADMIN' || userRole === 'CLINIC_ADMIN' ? 'ADM' : 'USR'
+    const prefix = userRole === 'SUPER_ADMIN' || userRole === 'CLINIC_ADMIN' ? 'ADM' : userRole === 'SALES_EXECUTIVE' ? 'SLS' : 'USR'
     const displayId = await generateDisplayId('user', prefix)
 
     const newAdmin = await prisma.user.create({
       data: {
         displayId,
         name,
-        email,
+        email: lowerEmail,
         passwordHash,
         phone: phone || null,
         role: userRole,
         status: userStatus,
       },
     })
+
+    if (userRole === 'SALES_EXECUTIVE') {
+      await prisma.salesUser.upsert({
+        where: { email: lowerEmail },
+        update: {
+          name,
+          phone: phone || null,
+          status: status || 'Active',
+        },
+        create: {
+          displayId,
+          name,
+          email: lowerEmail,
+          phone: phone || null,
+          territory: 'General Platform',
+          tier: 'Senior Regional Tier',
+          commissionRate: 10.0,
+          commission: '10% recurring',
+          status: status || 'Active',
+        }
+      }).catch(() => null)
+    }
 
     res.json({ success: true, data: newAdmin })
   } catch (err) {
@@ -569,6 +594,8 @@ const getSalesUsers = async (req, res, next) => {
       orderBy: { createdAt: 'desc' },
     })
 
+    const defaultPasswordHash = await bcrypt.hash('12345678', 10)
+
     for (let i = 0; i < salesUsers.length; i++) {
       if (!salesUsers[i].displayId) {
         const generated = `SLS-${String(salesUsers.length - i).padStart(6, '0')}`
@@ -577,6 +604,27 @@ const getSalesUsers = async (req, res, next) => {
           data: { displayId: generated }
         }).catch(() => null)
         salesUsers[i].displayId = generated
+      }
+
+      // Auto-sync User authentication record for every SalesUser
+      if (salesUsers[i].email) {
+        const existingAuthUser = await prisma.user.findUnique({
+          where: { email: salesUsers[i].email.toLowerCase() }
+        }).catch(() => null)
+
+        if (!existingAuthUser) {
+          await prisma.user.create({
+            data: {
+              displayId: salesUsers[i].displayId || `SLS-00000${i + 1}`,
+              email: salesUsers[i].email.toLowerCase(),
+              passwordHash: defaultPasswordHash,
+              name: salesUsers[i].name || 'Sales Executive',
+              phone: salesUsers[i].phone || null,
+              role: 'SALES_EXECUTIVE',
+              status: 'ACTIVE'
+            }
+          }).catch(() => null)
+        }
       }
     }
 
@@ -589,19 +637,53 @@ const getSalesUsers = async (req, res, next) => {
 // Super Admin: Create Sales User
 const createSalesUser = async (req, res, next) => {
   try {
-    const { name, email, phone, territory, tier, commissionRate, commission, clinicsCount, pipelineCount, status, avatar } = req.body
+    const { name, email, password, phone, territory, tier, commissionRate, commission, clinicsCount, pipelineCount, status, avatar } = req.body
     if (!name || !email) {
       return res.status(400).json({ success: false, message: 'Name and Email are required' })
     }
 
-    const count = await prisma.salesUser.count()
-    const displayId = `SLS-${String(count + 1).padStart(6, '0')}`
+    const lowerEmail = email.toLowerCase().trim()
+    const userDisplayId = await generateDisplayId('user', 'SLS')
+    const salesDisplayId = await generateDisplayId('salesUser', 'SLS').catch(() => userDisplayId)
 
-    const newSalesUser = await prisma.salesUser.create({
-      data: {
-        displayId,
+    // 1. Create/upsert User Authentication Account with bcrypt hashed password '12345678'
+    const passToHash = (password && String(password).trim().length > 0) ? String(password).trim() : '12345678'
+    const passwordHash = await bcrypt.hash(passToHash, 10)
+    
+    await prisma.user.upsert({
+      where: { email: lowerEmail },
+      update: {
         name,
-        email,
+        role: 'SALES_EXECUTIVE',
+        passwordHash,
+        status: status === 'Active' ? 'ACTIVE' : (status || 'ACTIVE')
+      },
+      create: {
+        displayId: userDisplayId,
+        email: lowerEmail,
+        passwordHash,
+        name,
+        phone: phone || null,
+        role: 'SALES_EXECUTIVE',
+        status: 'ACTIVE'
+      }
+    })
+
+    // 2. Create/upsert SalesUser Profile Record
+    const newSalesUser = await prisma.salesUser.upsert({
+      where: { email: lowerEmail },
+      update: {
+        name,
+        phone: phone || null,
+        territory: territory || 'General Platform',
+        tier: tier || 'Senior Regional Tier',
+        status: status || 'Active',
+        avatar: avatar || null,
+      },
+      create: {
+        displayId: salesDisplayId,
+        name,
+        email: lowerEmail,
         phone: phone || null,
         territory: territory || 'General Platform',
         tier: tier || 'Senior Regional Tier',
@@ -625,10 +707,32 @@ const createSalesUser = async (req, res, next) => {
 const updateSalesUser = async (req, res, next) => {
   try {
     const { id } = req.params
+    const { password, ...restData } = req.body
+
     const updated = await prisma.salesUser.update({
       where: { id },
-      data: req.body,
+      data: restData,
     })
+
+    // Also sync User auth record
+    if (updated.email) {
+      const lowerEmail = updated.email.toLowerCase().trim()
+      const updateAuthData = {
+        name: updated.name,
+        phone: updated.phone || null,
+        status: updated.status === 'Active' ? 'ACTIVE' : (updated.status || 'ACTIVE')
+      }
+
+      if (password && password.trim().length > 0) {
+        updateAuthData.passwordHash = await bcrypt.hash(password.trim(), 10)
+      }
+
+      await prisma.user.updateMany({
+        where: { email: lowerEmail },
+        data: updateAuthData
+      }).catch(() => null)
+    }
+
     res.json({ success: true, data: updated })
   } catch (err) {
     next(err)
@@ -1689,6 +1793,25 @@ const getProfile = async (req, res, next) => {
       })
     }
 
+    if (!user && req.user?.email) {
+      user = await prisma.user.findUnique({
+        where: { email: req.user.email },
+        select: {
+          id: true,
+          displayId: true,
+          email: true,
+          name: true,
+          phone: true,
+          role: true,
+          status: true,
+          avatarUrl: true,
+          profileData: true,
+          createdAt: true,
+          updatedAt: true
+        }
+      })
+    }
+
     if (!user) {
       return res.status(401).json({ success: false, message: 'User profile not found or unauthorized.' })
     }
@@ -1715,7 +1838,27 @@ const updateProfile = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Super Admin user record not found' })
     }
 
-    const { name, email, phone, avatarUrl, profileData } = req.body
+    const { name, email, phone, avatarUrl, profileData, currentPassword, newPassword } = req.body
+
+    const user = await prisma.user.findUnique({ where: { id: userId } })
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'Super Admin user record not found' })
+    }
+
+    let passwordHashUpdate = {}
+    if (newPassword) {
+      if (!currentPassword) {
+        return res.status(400).json({ success: false, message: 'Current password is required to change password' })
+      }
+      if (user.passwordHash) {
+        const isMatch = await bcrypt.compare(currentPassword, user.passwordHash)
+        if (!isMatch) {
+          return res.status(400).json({ success: false, message: 'Current password is incorrect' })
+        }
+      }
+      const salt = await bcrypt.genSalt(10)
+      passwordHashUpdate.passwordHash = await bcrypt.hash(newPassword, salt)
+    }
 
     const updatedUser = await prisma.user.update({
       where: { id: userId },
@@ -1724,7 +1867,8 @@ const updateProfile = async (req, res, next) => {
         ...(email && { email }),
         ...(phone !== undefined && { phone }),
         ...(avatarUrl !== undefined && { avatarUrl }),
-        ...(profileData !== undefined && { profileData })
+        ...(profileData !== undefined && { profileData }),
+        ...passwordHashUpdate
       },
       select: {
         id: true,

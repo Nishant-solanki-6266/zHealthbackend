@@ -19,14 +19,14 @@ const authenticate = async (req, res, next) => {
             return next()
           }
         } catch (err) {
-          // Token expired or invalid, fallback to active session
+          // Token expired or invalid
         }
       }
     }
 
-    // Default fallback user context for seamless connection
+    // Default fallback to active clinic admin or active user
     const defaultUser = await prisma.user.findFirst({
-      where: { role: 'SUPER_ADMIN' },
+      where: { status: 'ACTIVE' },
       select: { id: true, email: true, name: true, role: true, status: true },
     })
 

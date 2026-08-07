@@ -169,24 +169,39 @@ const createTask = async (req, res, next) => {
     if (!title) return res.status(400).json({ success: false, message: 'Task title is required' })
 
     const count = await prisma.salesTask.count()
-    const displayId = `TSK-${String(count + 1).padStart(6, '0')}`
+    let displayId = `TSK-${String(count + 1).padStart(6, '0')}`
+    let isUnique = false
+    let attempt = 0
+    while (!isUnique && attempt < 20) {
+      const existing = await prisma.salesTask.findUnique({ where: { displayId } })
+      if (!existing) {
+        isUnique = true
+      } else {
+        attempt++
+        displayId = `TSK-${String(count + 1 + attempt).padStart(6, '0')}`
+      }
+    }
+    if (!isUnique) {
+      displayId = `TSK-${Date.now()}`
+    }
 
     const task = await prisma.salesTask.create({
       data: {
         displayId,
-        title,
-        category: category || 'Calls',
-        leadName: leadName || null,
-        dueDate: dueDate || null,
-        priority: priority || 'Medium',
-        status: status || 'Pending',
-        assignedTo: assignedTo || (req.user ? req.user.name : 'Sales Executive'),
-        notes: notes || null,
+        title: String(title),
+        category: category ? String(category) : 'Calls',
+        leadName: leadName ? String(leadName) : null,
+        dueDate: dueDate ? String(dueDate) : null,
+        priority: priority ? String(priority) : 'Medium',
+        status: status ? String(status) : 'Pending',
+        assignedTo: assignedTo || (req.user ? req.user.name || req.user.email : 'Sales Executive'),
+        notes: notes ? String(notes) : null,
       }
     })
 
     res.json({ success: true, data: task })
   } catch (err) {
+    console.error('❌ Error creating sales task in backend:', err)
     next(err)
   }
 }
