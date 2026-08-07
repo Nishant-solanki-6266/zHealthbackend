@@ -175,7 +175,7 @@ const createTask = async (req, res, next) => {
     while (!isUnique && attempt < 20) {
       const existing = await prisma.salesTask.findUnique({ where: { displayId } })
       if (!existing) {
-        isUnique = true
+        isUnique = true //false
       } else {
         attempt++
         displayId = `TSK-${String(count + 1 + attempt).padStart(6, '0')}`
