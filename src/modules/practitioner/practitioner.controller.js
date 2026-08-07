@@ -112,29 +112,30 @@ const createAppointment = async (req, res, next) => {
     const count = await prisma.appointment.count().catch(() => 0)
     const displayId = `APT-${String(count + 1).padStart(6, '0')}`
 
+    const parsedTravel = travelDetails
+      ? (typeof travelDetails === 'object' ? travelDetails : JSON.parse(travelDetails))
+      : (travel ? (typeof travel === 'object' ? travel : (typeof travel === 'string' ? JSON.parse(travel) : null)) : null)
+
     const appt = await prisma.appointment.create({
       data: {
         displayId,
-        patientId,
+        patientId: patientId || null,
         patientName: patientName || 'Unknown Patient',
-        practitionerId: finalPracId,
+        practitionerId: finalPracId || null,
         practitionerName: finalPracName || 'Dr. Sarah Jenkins',
-        appointmentType: appointmentType || 'Consultation',
+        serviceName: serviceName || appointmentType || 'Consultation',
+        branchId: branchId || null,
+        branchName: branchName || null,
         date: date || new Date().toISOString().split('T')[0],
-        time: time || '09:00',
+        startTime: startTime || time || '09:00',
         endTime: endTime || '10:00',
-        duration: parseInt(duration) || 60,
-        notes: notes || '',
+        status: status || 'Confirmed',
         location: location || 'Clinic',
         room: room || 'Room A',
-        repeat: repeat || 'None',
-        diagnosis: diagnosis || '',
-        bodyPart: bodyPart || '',
-        ndisLineItem: ndisLineItem || '',
-        invoiceStatus: invoiceStatus || 'Not Invoiced',
-        fundingScheme: fundingScheme || 'Private',
-        status: 'Confirmed',
-        travelDetails: travel ? travel : null
+        notes: notes || '',
+        fee: parseFloat(fee) || 0.0,
+        isPaid: Boolean(isPaid),
+        travelDetails: parsedTravel
       }
     })
 
@@ -147,8 +148,34 @@ const createAppointment = async (req, res, next) => {
 const updateAppointment = async (req, res, next) => {
   try {
     const { id } = req.params
-    const updateData = { ...req.body }
-    delete updateData.id
+    const {
+      patientId, patientName, practitionerId, practitionerName,
+      appointmentType, serviceName, date, time, startTime, endTime, notes, location, room,
+      branchId, branchName, fee, isPaid, travel, travelDetails, status
+    } = req.body
+
+    const updateData = {}
+    if (patientId !== undefined) updateData.patientId = patientId
+    if (patientName !== undefined) updateData.patientName = patientName
+    if (practitionerId !== undefined) updateData.practitionerId = practitionerId
+    if (practitionerName !== undefined) updateData.practitionerName = practitionerName
+    if (serviceName !== undefined || appointmentType !== undefined) updateData.serviceName = serviceName || appointmentType
+    if (branchId !== undefined) updateData.branchId = branchId
+    if (branchName !== undefined) updateData.branchName = branchName
+    if (date !== undefined) updateData.date = date
+    if (startTime !== undefined || time !== undefined) updateData.startTime = startTime || time
+    if (endTime !== undefined) updateData.endTime = endTime
+    if (status !== undefined) updateData.status = status
+    if (location !== undefined) updateData.location = location
+    if (room !== undefined) updateData.room = room
+    if (notes !== undefined) updateData.notes = notes
+    if (fee !== undefined) updateData.fee = parseFloat(fee) || 0.0
+    if (isPaid !== undefined) updateData.isPaid = Boolean(isPaid)
+    
+    if (travelDetails !== undefined || travel !== undefined) {
+      const t = travelDetails || travel
+      updateData.travelDetails = t ? (typeof t === 'object' ? t : (typeof t === 'string' ? JSON.parse(t) : null)) : null
+    }
 
     const appt = await prisma.appointment.update({
       where: { id },

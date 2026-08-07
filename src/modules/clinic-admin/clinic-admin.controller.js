@@ -623,36 +623,37 @@ const createAppointment = async (req, res, next) => {
   try {
     const {
       patientId, patientName, practitionerId, practitionerName,
-      appointmentType, date, time, endTime, duration, notes, location, room,
-      repeat, diagnosis, bodyPart, ndisLineItem, invoiceStatus, fundingScheme, travel
+      appointmentType, serviceName, date, time, startTime, endTime, notes, location, room,
+      branchId, branchName, fee, isPaid, travel, travelDetails, status
     } = req.body
 
     const count = await prisma.appointment.count().catch(() => 0)
     const displayId = `APT-${String(count + 1).padStart(6, '0')}`
 
+    const parsedTravel = travelDetails
+      ? (typeof travelDetails === 'object' ? travelDetails : JSON.parse(travelDetails))
+      : (travel ? (typeof travel === 'object' ? travel : (typeof travel === 'string' ? JSON.parse(travel) : null)) : null)
+
     const appt = await prisma.appointment.create({
       data: {
         displayId,
-        patientId,
+        patientId: patientId || null,
         patientName: patientName || 'Unknown Patient',
-        practitionerId,
+        practitionerId: practitionerId || null,
         practitionerName: practitionerName || 'Unknown Practitioner',
-        appointmentType: appointmentType || 'Consultation',
+        serviceName: serviceName || appointmentType || 'Consultation',
+        branchId: branchId || null,
+        branchName: branchName || null,
         date: date || new Date().toISOString().split('T')[0],
-        time: time || '09:00',
+        startTime: startTime || time || '09:00',
         endTime: endTime || '10:00',
-        duration: parseInt(duration) || 60,
-        notes: notes || '',
+        status: status || 'Confirmed',
         location: location || 'Clinic',
         room: room || 'Room A',
-        repeat: repeat || 'None',
-        diagnosis: diagnosis || '',
-        bodyPart: bodyPart || '',
-        ndisLineItem: ndisLineItem || '',
-        invoiceStatus: invoiceStatus || 'Not Invoiced',
-        fundingScheme: fundingScheme || 'Private',
-        status: 'Confirmed',
-        travel: travel ? JSON.stringify(travel) : null
+        notes: notes || '',
+        fee: parseFloat(fee) || 0.0,
+        isPaid: Boolean(isPaid),
+        travelDetails: parsedTravel
       }
     })
 
@@ -665,9 +666,38 @@ const createAppointment = async (req, res, next) => {
 const updateAppointment = async (req, res, next) => {
   try {
     const { id } = req.params
+    const {
+      patientId, patientName, practitionerId, practitionerName,
+      appointmentType, serviceName, date, time, startTime, endTime, notes, location, room,
+      branchId, branchName, fee, isPaid, travel, travelDetails, status
+    } = req.body
+
+    const updateData = {}
+    if (patientId !== undefined) updateData.patientId = patientId
+    if (patientName !== undefined) updateData.patientName = patientName
+    if (practitionerId !== undefined) updateData.practitionerId = practitionerId
+    if (practitionerName !== undefined) updateData.practitionerName = practitionerName
+    if (serviceName !== undefined || appointmentType !== undefined) updateData.serviceName = serviceName || appointmentType
+    if (branchId !== undefined) updateData.branchId = branchId
+    if (branchName !== undefined) updateData.branchName = branchName
+    if (date !== undefined) updateData.date = date
+    if (startTime !== undefined || time !== undefined) updateData.startTime = startTime || time
+    if (endTime !== undefined) updateData.endTime = endTime
+    if (status !== undefined) updateData.status = status
+    if (location !== undefined) updateData.location = location
+    if (room !== undefined) updateData.room = room
+    if (notes !== undefined) updateData.notes = notes
+    if (fee !== undefined) updateData.fee = parseFloat(fee) || 0.0
+    if (isPaid !== undefined) updateData.isPaid = Boolean(isPaid)
+    
+    if (travelDetails !== undefined || travel !== undefined) {
+      const t = travelDetails || travel
+      updateData.travelDetails = t ? (typeof t === 'object' ? t : (typeof t === 'string' ? JSON.parse(t) : null)) : null
+    }
+
     const appt = await prisma.appointment.update({
       where: { id },
-      data: req.body
+      data: updateData
     })
     res.json({ success: true, data: appt })
   } catch (err) {
@@ -1732,6 +1762,25 @@ const getProfile = async (req, res, next) => {
       })
     }
 
+    if (!user && req.user?.email) {
+      user = await prisma.user.findUnique({
+        where: { email: req.user.email },
+        select: {
+          id: true,
+          displayId: true,
+          email: true,
+          name: true,
+          phone: true,
+          role: true,
+          status: true,
+          avatarUrl: true,
+          profileData: true,
+          createdAt: true,
+          updatedAt: true
+        }
+      })
+    }
+
     if (!user) {
       user = await prisma.user.findFirst({
         where: { role: 'CLINIC_ADMIN' },
@@ -1809,7 +1858,27 @@ const updateProfile = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Clinic Admin user record not found' })
     }
 
-    const { name, email, phone, avatarUrl, profileData } = req.body
+    const { name, email, phone, avatarUrl, profileData, currentPassword, newPassword } = req.body
+
+    const user = await prisma.user.findUnique({ where: { id: userId } })
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'Clinic Admin user record not found' })
+    }
+
+    let passwordHashUpdate = {}
+    if (newPassword) {
+      if (!currentPassword) {
+        return res.status(400).json({ success: false, message: 'Current password is required to change password' })
+      }
+      if (user.passwordHash) {
+        const isMatch = await bcrypt.compare(currentPassword, user.passwordHash)
+        if (!isMatch) {
+          return res.status(400).json({ success: false, message: 'Current password is incorrect' })
+        }
+      }
+      const salt = await bcrypt.genSalt(10)
+      passwordHashUpdate.passwordHash = await bcrypt.hash(newPassword, salt)
+    }
 
     const updatedUser = await prisma.user.update({
       where: { id: userId },
@@ -1818,7 +1887,8 @@ const updateProfile = async (req, res, next) => {
         ...(email && { email }),
         ...(phone !== undefined && { phone }),
         ...(avatarUrl !== undefined && { avatarUrl }),
-        ...(profileData !== undefined && { profileData })
+        ...(profileData !== undefined && { profileData }),
+        ...passwordHashUpdate
       },
       select: {
         id: true,
