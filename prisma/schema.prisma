@@ -945,3 +945,18 @@ model CareTeamMessage {
 
   @@map("care_team_messages")
 }
+
+model Notification {
+  id        String   @id @default(uuid())
+  title     String
+  message   String   @db.Text
+  target    String   // 'SUPER_ADMIN', 'CLINIC_ADMIN', 'PRACTITIONER', 'SALES_EXECUTIVE', 'PATIENT', 'All', or user ID
+  type      String   @default("inbox") // 'inbox' or 'sent'
+  isRead    Boolean  @default(false)
+  userId    String?  // References user who owns or sent the notification
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([target, createdAt])
+  @@map("notifications")
+}
