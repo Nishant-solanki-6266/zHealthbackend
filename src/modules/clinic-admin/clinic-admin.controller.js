@@ -741,25 +741,24 @@ const getPatients = async (req, res, next) => {
     const userClinicId = await getClinicIdFromReq(req)
 
     let whereClause = {}
-    if (userRole !== 'SUPER_ADMIN' && userClinicId) {
-      whereClause = {
-        OR: [
-          { clinicId: userClinicId },
-          { clinicId: null }
-        ]
+    if (userRole !== 'SUPER_ADMIN') {
+      if (!userClinicId) {
+        return res.json({ success: true, data: [] })
       }
+      whereClause = { clinicId: userClinicId }
     }
 
     let patients = await prisma.patient.findMany({
       where: whereClause,
+      include: { user: { select: { id: true, role: true } } },
       orderBy: { createdAt: 'desc' }
     })
 
-    if (patients.length === 0) {
+    if (patients.length === 0 && userClinicId) {
       const seedPatients = [
         {
           displayId: 'CLI-000001',
-          clinicId: userClinicId || null,
+          clinicId: userClinicId,
           fullName: 'Emma Watson',
           dob: '1995-04-15',
           email: 'emma.watson@example.com',
@@ -770,7 +769,7 @@ const getPatients = async (req, res, next) => {
         },
         {
           displayId: 'CLI-000002',
-          clinicId: userClinicId || null,
+          clinicId: userClinicId,
           fullName: 'Liam Hemsworth',
           dob: '1990-01-13',
           email: 'liam.h@example.com',
@@ -781,7 +780,7 @@ const getPatients = async (req, res, next) => {
         },
         {
           displayId: 'CLI-000003',
-          clinicId: userClinicId || null,
+          clinicId: userClinicId,
           fullName: 'Olivia Wilde',
           dob: '1988-03-10',
           email: 'olivia.w@example.com',
@@ -794,9 +793,13 @@ const getPatients = async (req, res, next) => {
       await prisma.patient.createMany({ data: seedPatients }).catch(() => null)
       patients = await prisma.patient.findMany({
         where: whereClause,
+        include: { user: { select: { id: true, role: true } } },
         orderBy: { createdAt: 'desc' }
       })
     }
+
+    // Exclude staff/admin accounts mistakenly linked to patient table (preserve valid patients with userId === null)
+    patients = patients.filter(p => !p.user || p.user.role === 'PATIENT')
 
     if (search && search.trim()) {
       const q = search.toLowerCase()
@@ -1155,13 +1158,11 @@ const getWaitlist = async (req, res, next) => {
     const userClinicId = await getClinicIdFromReq(req)
 
     let whereClause = {}
-    if (userRole !== 'SUPER_ADMIN' && userClinicId) {
-      whereClause = {
-        OR: [
-          { clinicId: userClinicId },
-          { clinicId: null }
-        ]
+    if (userRole !== 'SUPER_ADMIN') {
+      if (!userClinicId) {
+        return res.json({ success: true, data: [] })
       }
+      whereClause = { clinicId: userClinicId }
     }
 
     let waitlist = await prisma.waitlist.findMany({
@@ -1296,13 +1297,11 @@ const getPayments = async (req, res, next) => {
     const userClinicId = await getClinicIdFromReq(req)
 
     let whereClause = {}
-    if (userRole !== 'SUPER_ADMIN' && userClinicId) {
-      whereClause = {
-        OR: [
-          { clinicId: userClinicId },
-          { clinicId: null }
-        ]
+    if (userRole !== 'SUPER_ADMIN') {
+      if (!userClinicId) {
+        return res.json({ success: true, data: [] })
       }
+      whereClause = { clinicId: userClinicId }
     }
 
     let payments = await prisma.payment.findMany({

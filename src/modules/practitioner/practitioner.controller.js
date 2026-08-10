@@ -98,9 +98,18 @@ const createAppointment = async (req, res, next) => {
   try {
     const {
       patientId, patientName, practitionerId, practitionerName,
-      appointmentType, date, time, endTime, duration, notes, location, room,
-      repeat, diagnosis, bodyPart, ndisLineItem, invoiceStatus, fundingScheme, travel
+      appointmentType, serviceName, date, time, startTime, endTime, duration, notes, location, room,
+      repeat, diagnosis, bodyPart, ndisLineItem, invoiceStatus, fundingScheme, travel, travelDetails,
+      branchId, branchName, fee, isPaid, status
     } = req.body
+
+    let userClinicId = req.user?.clinicId
+    if (!userClinicId && req.user?.id) {
+      const practitioner = await prisma.practitioner.findFirst({
+        where: { OR: [{ userId: req.user.id }, { email: req.user.email }] }
+      }).catch(() => null)
+      if (practitioner && practitioner.clinicId) userClinicId = practitioner.clinicId
+    }
 
     let finalPracId = practitionerId
     let finalPracName = practitionerName
@@ -113,12 +122,13 @@ const createAppointment = async (req, res, next) => {
     const displayId = `APT-${String(count + 1).padStart(6, '0')}`
 
     const parsedTravel = travelDetails
-      ? (typeof travelDetails === 'object' ? travelDetails : JSON.parse(travelDetails))
+      ? (typeof travelDetails === 'object' ? travelDetails : (typeof travelDetails === 'string' ? JSON.parse(travelDetails) : null))
       : (travel ? (typeof travel === 'object' ? travel : (typeof travel === 'string' ? JSON.parse(travel) : null)) : null)
 
     const appt = await prisma.appointment.create({
       data: {
         displayId,
+        clinicId: userClinicId || null,
         patientId: patientId || null,
         patientName: patientName || 'Unknown Patient',
         practitionerId: finalPracId || null,
@@ -129,7 +139,7 @@ const createAppointment = async (req, res, next) => {
         date: date || new Date().toISOString().split('T')[0],
         startTime: startTime || time || '09:00',
         endTime: endTime || '10:00',
-        status: status || 'Confirmed',
+        status: status || 'Scheduled',
         location: location || 'Clinic',
         room: room || 'Room A',
         notes: notes || '',
@@ -223,7 +233,22 @@ const getPractitioners = async (req, res, next) => {
 // Waitlist
 const getWaitlist = async (req, res, next) => {
   try {
-    const waitlist = await prisma.waitlist.findMany({ orderBy: { createdAt: 'desc' } })
+    let clinicId = req.user?.clinicId
+    if (!clinicId && req.user?.id) {
+      const practitioner = await prisma.practitioner.findFirst({
+        where: { OR: [{ userId: req.user.id }, { email: req.user.email }] }
+      }).catch(() => null)
+      if (practitioner && practitioner.clinicId) clinicId = practitioner.clinicId
+    }
+
+    if (!clinicId) {
+      return res.json({ success: true, data: [] })
+    }
+
+    const waitlist = await prisma.waitlist.findMany({
+      where: { clinicId },
+      orderBy: { createdAt: 'desc' }
+    })
     res.json({ success: true, data: waitlist })
   } catch (err) {
     next(err)
@@ -232,7 +257,20 @@ const getWaitlist = async (req, res, next) => {
 
 const addToWaitlist = async (req, res, next) => {
   try {
-    const entry = await prisma.waitlist.create({ data: req.body })
+    let clinicId = req.user?.clinicId
+    if (!clinicId && req.user?.id) {
+      const practitioner = await prisma.practitioner.findFirst({
+        where: { OR: [{ userId: req.user.id }, { email: req.user.email }] }
+      }).catch(() => null)
+      if (practitioner && practitioner.clinicId) clinicId = practitioner.clinicId
+    }
+
+    const entryData = {
+      ...req.body,
+      clinicId: clinicId || req.body.clinicId || null
+    }
+
+    const entry = await prisma.waitlist.create({ data: entryData })
     res.json({ success: true, data: entry })
   } catch (err) {
     next(err)
@@ -271,8 +309,21 @@ const getPatients = async (req, res, next) => {
       if (practitioner && practitioner.clinicId) clinicId = practitioner.clinicId
     }
 
-    const whereClause = clinicId ? { OR: [{ clinicId }, { clinicId: null }] } : {}
-    const patients = await prisma.patient.findMany({ where: whereClause, orderBy: { createdAt: 'desc' } })
+    // Strict multi-tenant safety: if no clinicId is found, return empty array (prevent cross-tenant query)
+    if (!clinicId) {
+      return res.json({ success: true, data: [] })
+    }
+
+    const whereClause = { clinicId }
+    let patients = await prisma.patient.findMany({
+      where: whereClause,
+      include: { user: { select: { id: true, role: true } } },
+      orderBy: { createdAt: 'desc' }
+    })
+    
+    // Exclude staff/admin accounts mistakenly linked to patient table (preserve valid patients with userId === null)
+    patients = patients.filter(p => !p.user || p.user.role === 'PATIENT')
+
     res.json({ success: true, data: patients })
   } catch (err) {
     next(err)
@@ -315,20 +366,57 @@ const updatePatient = async (req, res, next) => {
 const getPayments = async (req, res, next) => {
   try {
     const { search } = req.query
-    let payments = await prisma.payment.findMany({ orderBy: { createdAt: 'desc' } })
+    let clinicId = req.user?.clinicId
+    let practitionerId = null
+    if (req.user?.id) {
+      const practitioner = await prisma.practitioner.findFirst({
+        where: { OR: [{ userId: req.user.id }, { email: req.user.email }] }
+      }).catch(() => null)
+      if (practitioner) {
+        if (!clinicId && practitioner.clinicId) clinicId = practitioner.clinicId
+        practitionerId = practitioner.id
+      }
+    }
+
+    if (!clinicId) {
+      return res.json({ success: true, data: [] })
+    }
+
+    let payments = await prisma.payment.findMany({
+      where: { clinicId },
+      orderBy: { createdAt: 'desc' }
+    })
 
     if (payments.length === 0) {
       const seedPayments = [
-        { receiptNumber: 'RCPT-0394', clientName: 'Nishant Solanki', amount: 108.00, paymentDate: '19 Aug 2026', invoiceReference: 'INV-0394', transactionId: 'tx_rcpt-0394_892' },
-        { receiptNumber: 'RCPT-0380', clientName: 'Peter Bent', amount: 264.64, paymentDate: '16 Jun 2026', invoiceReference: 'INV-0380', transactionId: 'tx_rcpt-0380_892' },
-        { receiptNumber: 'RCPT-0377', clientName: 'Andrej Anastasov', amount: 241.87, paymentDate: '19 Jun 2026', invoiceReference: 'INV-0377', transactionId: 'tx_rcpt-0377_892' },
-        { receiptNumber: 'RCPT-0378', clientName: 'Alessia Sharpe', amount: 232.24, paymentDate: '17 Jun 2026', invoiceReference: 'INV-0378', transactionId: 'tx_rcpt-0378_892' },
-        { receiptNumber: 'RCPT-0379', clientName: 'Noah Lawrence', amount: 257.71, paymentDate: '18 Jun 2026', invoiceReference: 'INV-0379', transactionId: 'tx_rcpt-0379_892' },
-        { receiptNumber: 'RCPT-0383', clientName: 'Feras Taha', amount: 187.50, paymentDate: '23 Jun 2026', invoiceReference: 'INV-0383', transactionId: 'tx_rcpt-0383_892' },
-        { receiptNumber: 'RCPT-0381', clientName: 'Liliana Radojcic', amount: 229.99, paymentDate: '17 Jun 2026', invoiceReference: 'INV-0381', transactionId: 'tx_rcpt-0381_892' }
+        { clinicId, receiptNumber: 'RCPT-0394', clientName: 'Nishant Solanki', amount: 108.00, paymentDate: '19 Aug 2026', invoiceReference: 'INV-0394', transactionId: 'tx_rcpt-0394_892' },
+        { clinicId, receiptNumber: 'RCPT-0380', clientName: 'Peter Bent', amount: 264.64, paymentDate: '16 Jun 2026', invoiceReference: 'INV-0380', transactionId: 'tx_rcpt-0380_892' },
+        { clinicId, receiptNumber: 'RCPT-0377', clientName: 'Andrej Anastasov', amount: 241.87, paymentDate: '19 Jun 2026', invoiceReference: 'INV-0377', transactionId: 'tx_rcpt-0377_892' }
       ]
       await prisma.payment.createMany({ data: seedPayments }).catch(() => null)
-      payments = await prisma.payment.findMany({ orderBy: { createdAt: 'desc' } })
+      payments = await prisma.payment.findMany({
+        where: { clinicId },
+        orderBy: { createdAt: 'desc' }
+      })
+    }
+
+    // Filter payments for logged-in practitioner's clients/sessions
+    if (practitionerId) {
+      const practitionerAppts = await prisma.appointment.findMany({
+        where: { OR: [{ practitionerId }, { practitionerName: req.user?.name }] },
+        select: { patientId: true, patientName: true }
+      }).catch(() => [])
+
+      const allowedPatientIds = new Set(practitionerAppts.map(a => a.patientId).filter(Boolean))
+      const allowedPatientNames = new Set(practitionerAppts.map(a => (a.patientName || '').toLowerCase().trim()).filter(Boolean))
+
+      payments = payments.filter(p => {
+        if (p.practitionerId && p.practitionerId === practitionerId) return true
+        if (p.patientId && allowedPatientIds.has(p.patientId)) return true
+        const cName = (p.clientName || '').toLowerCase().trim()
+        if (cName && allowedPatientNames.has(cName)) return true
+        return false
+      })
     }
 
     if (search && search.trim()) {
@@ -348,7 +436,19 @@ const getPayments = async (req, res, next) => {
 
 const createPayment = async (req, res, next) => {
   try {
-    const { from, clientName, amount, date, paymentDate, paymentMethod, invoiceReference, patientId } = req.body
+    const { from, clientName, amount, date, paymentDate, paymentMethod, invoiceReference, patientId, practitionerId } = req.body
+
+    let clinicId = req.user?.clinicId
+    let finalPracId = practitionerId || null
+    if (req.user?.id) {
+      const practitioner = await prisma.practitioner.findFirst({
+        where: { OR: [{ userId: req.user.id }, { email: req.user.email }] }
+      }).catch(() => null)
+      if (practitioner) {
+        if (!clinicId && practitioner.clinicId) clinicId = practitioner.clinicId
+        if (!finalPracId) finalPracId = practitioner.id
+      }
+    }
 
     const count = await prisma.payment.count().catch(() => 0)
     const receiptNumber = `RCPT-${String(count + 384).padStart(4, '0')}`
@@ -357,6 +457,7 @@ const createPayment = async (req, res, next) => {
 
     const payment = await prisma.payment.create({
       data: {
+        clinicId: clinicId || null,
         receiptNumber,
         clientName: finalClientName,
         amount: parseFloat(amount) || 0.0,
