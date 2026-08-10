@@ -33,4 +33,15 @@ router.get('/message-board', authenticate, superAdminController.getMessageBoardI
 router.post('/message-board', authenticate, superAdminController.createMessageBoardItem)
 router.delete('/message-board/:id', authenticate, superAdminController.deleteMessageBoardItem)
 
+// Notifications endpoint
+router.get('/notifications', (req, res) => {
+  res.json({
+    success: true,
+    data: [
+      { id: 'n1', title: 'System Updated', message: 'ZHealth OS software updated successfully.', date: 'Just now', read: false },
+      { id: 'n2', title: 'Waitlist Alert', message: 'Patient added to waitlist queue.', date: '10 mins ago', read: false }
+    ]
+  })
+})
+
 module.exports = router
