@@ -263,7 +263,16 @@ const removeFromWaitlist = async (req, res, next) => {
 // Patients
 const getPatients = async (req, res, next) => {
   try {
-    const patients = await prisma.patient.findMany({ orderBy: { createdAt: 'desc' } })
+    let clinicId = req.user?.clinicId
+    if (!clinicId && req.user?.id) {
+      const practitioner = await prisma.practitioner.findFirst({
+        where: { OR: [{ userId: req.user.id }, { email: req.user.email }] }
+      }).catch(() => null)
+      if (practitioner && practitioner.clinicId) clinicId = practitioner.clinicId
+    }
+
+    const whereClause = clinicId ? { OR: [{ clinicId }, { clinicId: null }] } : {}
+    const patients = await prisma.patient.findMany({ where: whereClause, orderBy: { createdAt: 'desc' } })
     res.json({ success: true, data: patients })
   } catch (err) {
     next(err)
@@ -272,7 +281,20 @@ const getPatients = async (req, res, next) => {
 
 const createPatient = async (req, res, next) => {
   try {
-    const patient = await prisma.patient.create({ data: req.body })
+    let clinicId = req.user?.clinicId
+    if (!clinicId && req.user?.id) {
+      const practitioner = await prisma.practitioner.findFirst({
+        where: { OR: [{ userId: req.user.id }, { email: req.user.email }] }
+      }).catch(() => null)
+      if (practitioner && practitioner.clinicId) clinicId = practitioner.clinicId
+    }
+
+    const patientData = {
+      ...req.body,
+      clinicId: clinicId || req.body.clinicId || null
+    }
+
+    const patient = await prisma.patient.create({ data: patientData })
     res.json({ success: true, data: patient })
   } catch (err) {
     next(err)

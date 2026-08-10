@@ -17,6 +17,9 @@ router.get('/health', (req, res) => {
   })
 })
 
+const authenticate = require('./middlewares/auth.middleware')
+const superAdminController = require('./modules/super-admin/super-admin.controller')
+
 // Mount modules
 router.use('/auth', authRoutes)
 router.use('/super-admin', superAdminRoutes)
@@ -24,5 +27,10 @@ router.use('/clinic-admin', clinicAdminRoutes)
 router.use('/practitioner', practitionerRoutes)
 router.use('/sales', salesRoutes)
 router.use('/patient', patientRoutes)
+
+// Shared Message Board routes for authenticated users
+router.get('/message-board', authenticate, superAdminController.getMessageBoardItems)
+router.post('/message-board', authenticate, superAdminController.createMessageBoardItem)
+router.delete('/message-board/:id', authenticate, superAdminController.deleteMessageBoardItem)
 
 module.exports = router
