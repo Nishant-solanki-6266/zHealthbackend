@@ -282,6 +282,7 @@ model Payment {
   status           String   @default("Successful (Paid)")
   transactionId    String?
   patientId        String?
+  practitionerId   String?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
@@ -309,17 +310,19 @@ model Product {
 }
 
 model Document {
-  id          String   @id @default(uuid())
-  name        String
-  patientName String
-  sentTo      String?
-  uploadBy    String   @default("Clinic Admin")
-  date        String
-  type        String   @default("Assessment")
-  status      String   @default("Active")
-  patientId   String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id             String   @id @default(uuid())
+  clinicId       String?
+  practitionerId String?
+  name           String
+  patientName    String
+  sentTo         String?
+  uploadBy       String   @default("Clinic Admin")
+  date           String
+  type           String   @default("Assessment")
+  status         String   @default("Active")
+  patientId      String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   @@map("documents")
 }
@@ -906,6 +909,7 @@ model SystemSetting {
 model ConsultationNote {
   id               String   @id @default(uuid())
   displayId        String?  @unique
+  clinicId         String?
   patientId        String?
   patientName      String
   practitionerId   String?
@@ -920,6 +924,7 @@ model ConsultationNote {
   updatedAt        DateTime @updatedAt
 
   @@index([patientId, date])
+  @@index([clinicId, status])
   @@map("consultation_notes")
 }
 
@@ -959,4 +964,19 @@ model Notification {
 
   @@index([target, createdAt])
   @@map("notifications")
+}
+
+model ApiKey {
+  id        String   @id @default(uuid())
+  clinicId  String?
+  userId    String?
+  name      String
+  token     String   @unique
+  created   String
+  lastUsed  String   @default("Never")
+  status    String   @default("Active")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("api_keys")
 }

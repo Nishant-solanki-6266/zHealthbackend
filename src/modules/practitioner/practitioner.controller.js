@@ -1,5 +1,26 @@
 const prisma = require('../../config/db')
 
+const getClinicIdFromReq = async (req) => {
+  if (!req?.user) return null
+  let clinicId = req.user.clinicId
+
+  if (!clinicId && req.user.profileData && typeof req.user.profileData === 'object' && req.user.profileData.clinicId) {
+    clinicId = req.user.profileData.clinicId
+  }
+
+  if (!clinicId && req.user.id) {
+    const userBranch = await prisma.userBranch.findFirst({
+      where: { userId: req.user.id },
+      include: { branch: true }
+    }).catch(() => null)
+    if (userBranch?.branch?.clinicId) {
+      clinicId = userBranch.branch.clinicId
+    }
+  }
+
+  return clinicId || null
+}
+
 // Appointments
 const getAppointments = async (req, res, next) => {
   try {
@@ -378,29 +399,25 @@ const getPayments = async (req, res, next) => {
       }
     }
 
-    if (!clinicId) {
-      return res.json({ success: true, data: [] })
-    }
-
     let payments = await prisma.payment.findMany({
-      where: { clinicId },
+      where: clinicId ? { OR: [{ clinicId }, { clinicId: null }] } : {},
       orderBy: { createdAt: 'desc' }
     })
 
     if (payments.length === 0) {
       const seedPayments = [
-        { clinicId, receiptNumber: 'RCPT-0394', clientName: 'Nishant Solanki', amount: 108.00, paymentDate: '19 Aug 2026', invoiceReference: 'INV-0394', transactionId: 'tx_rcpt-0394_892' },
-        { clinicId, receiptNumber: 'RCPT-0380', clientName: 'Peter Bent', amount: 264.64, paymentDate: '16 Jun 2026', invoiceReference: 'INV-0380', transactionId: 'tx_rcpt-0380_892' },
-        { clinicId, receiptNumber: 'RCPT-0377', clientName: 'Andrej Anastasov', amount: 241.87, paymentDate: '19 Jun 2026', invoiceReference: 'INV-0377', transactionId: 'tx_rcpt-0377_892' }
+        { clinicId: clinicId || null, practitionerId: practitionerId || null, receiptNumber: 'RCPT-0394', clientName: 'Nishant Solanki', amount: 108.00, paymentDate: '19 Aug 2026', invoiceReference: 'INV-0394', transactionId: 'tx_rcpt-0394_892' },
+        { clinicId: clinicId || null, practitionerId: practitionerId || null, receiptNumber: 'RCPT-0380', clientName: 'Peter Bent', amount: 264.64, paymentDate: '16 Jun 2026', invoiceReference: 'INV-0380', transactionId: 'tx_rcpt-0380_892' },
+        { clinicId: clinicId || null, practitionerId: practitionerId || null, receiptNumber: 'RCPT-0377', clientName: 'Andrej Anastasov', amount: 241.87, paymentDate: '19 Jun 2026', invoiceReference: 'INV-0377', transactionId: 'tx_rcpt-0377_892' }
       ]
       await prisma.payment.createMany({ data: seedPayments }).catch(() => null)
       payments = await prisma.payment.findMany({
-        where: { clinicId },
+        where: clinicId ? { OR: [{ clinicId }, { clinicId: null }] } : {},
         orderBy: { createdAt: 'desc' }
       })
     }
 
-    // Filter payments for logged-in practitioner's clients/sessions
+    // Filter payments strictly for logged-in practitioner
     if (practitionerId) {
       const practitionerAppts = await prisma.appointment.findMany({
         where: { OR: [{ practitionerId }, { practitionerName: req.user?.name }] },
@@ -411,11 +428,16 @@ const getPayments = async (req, res, next) => {
       const allowedPatientNames = new Set(practitionerAppts.map(a => (a.patientName || '').toLowerCase().trim()).filter(Boolean))
 
       payments = payments.filter(p => {
+        // Direct match on practitioner ID
         if (p.practitionerId && p.practitionerId === practitionerId) return true
+        // Match on practitioner's patient ID or name
         if (p.patientId && allowedPatientIds.has(p.patientId)) return true
         const cName = (p.clientName || '').toLowerCase().trim()
         if (cName && allowedPatientNames.has(cName)) return true
-        return false
+        // If payment belongs explicitly to another practitioner, hide it from this practitioner
+        if (p.practitionerId && p.practitionerId !== practitionerId) return false
+        // Allow unassigned payments if client matches practitioner appointment
+        return !p.practitionerId && (allowedPatientIds.size === 0 || allowedPatientIds.has(p.patientId))
       })
     }
 
@@ -450,14 +472,15 @@ const createPayment = async (req, res, next) => {
       }
     }
 
-    const count = await prisma.payment.count().catch(() => 0)
-    const receiptNumber = `RCPT-${String(count + 384).padStart(4, '0')}`
+    const randNum = Math.floor(1000 + Math.random() * 9000)
+    const receiptNumber = `RCPT-${Date.now().toString().slice(-4)}${randNum}`
     const finalClientName = from || clientName || 'Client'
     const finalDate = paymentDate || date || new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
 
     const payment = await prisma.payment.create({
       data: {
         clinicId: clinicId || null,
+        practitionerId: finalPracId || null,
         receiptNumber,
         clientName: finalClientName,
         amount: parseFloat(amount) || 0.0,
@@ -475,6 +498,7 @@ const createPayment = async (req, res, next) => {
     next(err)
   }
 }
+
 
 const updatePayment = async (req, res, next) => {
   try {
@@ -509,69 +533,64 @@ const getProfile = async (req, res, next) => {
   try {
     const userId = req.user?.id
     const userEmail = req.user?.email
+    const user = userId ? await prisma.user.findUnique({ where: { id: userId } }).catch(() => null) : null
+    const effectiveEmail = user?.email || userEmail
+    const effectiveName = user?.name || req.user?.name || 'Dr. Practitioner'
 
     let practitioner = await prisma.practitioner.findFirst({
       where: {
         OR: [
           ...(userId ? [{ userId }] : []),
-          ...(userEmail ? [{ email: userEmail }] : [])
+          ...(effectiveEmail ? [{ email: effectiveEmail }] : [])
         ]
       }
     }).catch(() => null)
 
-    if (!practitioner) {
-      practitioner = await prisma.practitioner.findFirst({
-        where: { email: 'colin.edegbe@ceotherapy.com' }
-      }).catch(() => null)
-    }
-
-    if (!practitioner) {
+    if (!practitioner && effectiveEmail) {
       practitioner = await prisma.practitioner.create({
         data: {
-          name: 'Dr. Colin Edegbe',
+          userId: userId || null,
+          name: effectiveName,
           specialty: 'Physiotherapist',
-          email: userEmail || 'colin.edegbe@ceotherapy.com',
-          phone: '+61 412 345 678',
+          email: effectiveEmail,
+          phone: user?.phone || req.user?.phone || '+61 400 000 000',
           status: 'Active',
           color: '#8C4BFF',
           consultationFee: 150.0,
-          joinDate: '15 Jan 2024',
-          assignedBranches: ['NDIS', 'CEO Therapy Mobile'],
+          joinDate: new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }),
+          assignedBranches: ['Melbourne Clinic'],
           qualifications: ['BPhty (Hons)', 'AHPRA Registered'],
-          bio: 'Senior Musculoskeletal Physiotherapist'
+          bio: 'Registered Healthcare Specialist'
         }
       }).catch(() => null)
     }
 
-    let user = null
-    if (userId) {
-      user = await prisma.user.findUnique({ where: { id: userId } }).catch(() => null)
-    }
+    const displayName = practitioner?.name || effectiveName
+    const nameParts = displayName.trim().split(' ')
+    const firstName = nameParts[0] || 'Dr.'
+    const lastName = nameParts.slice(1).join(' ') || ''
 
     res.json({
       success: true,
       data: {
         id: practitioner?.id,
         userId: user?.id || userId,
-        title: 'Mr',
-        firstName: practitioner?.name ? practitioner.name.split(' ')[0] : 'Colin',
-        lastName: practitioner?.name ? practitioner.name.split(' ').slice(1).join(' ') : 'Edegbe',
-        gender: 'Male',
-        email: practitioner?.email || user?.email || 'colin.edegbe@ceotherapy.com',
-        phone: practitioner?.phone || user?.phone || '+61 412 345 678',
+        title: 'Dr',
+        firstName,
+        lastName,
+        gender: practitioner?.profileData?.gender || 'Male',
+        email: effectiveEmail,
+        phone: practitioner?.phone || user?.phone || '+61 400 000 000',
         dob: '1990-08-15',
         profTitle: practitioner?.specialty || 'Physiotherapist',
-        locations: practitioner?.assignedBranches || ['NDIS', 'CEO Therapy Mobile'],
+        locations: practitioner?.assignedBranches || ['Melbourne Clinic'],
         services: [
-          'Physiotherapy Subsequent Session (Therapeutic Supports)',
-          'Progress report (Non-Face-to-Face Services)',
-          'Initial Physiotherapy Session (Therapeutic Supports)'
+          'Physiotherapy Subsequent Session',
+          'Initial Assessment Session'
         ],
-        signature: 'Colin Edegbe',
+        signature: displayName,
         providerNumbers: [
-          { id: 1, type: 'AHPRA', num: 'PHY000278016', loc: 'NDIS' },
-          { id: 2, type: 'AHPRA', num: 'PHY000278016', loc: 'CEO Therapy Mobile' },
-          { id: 3, type: 'Medicare', num: '6683896B', loc: 'CEO Therapy Mobile' }
+          { id: 1, type: 'AHPRA', num: 'PHY000278016', loc: 'Melbourne Clinic' }
         ],
         avatarUrl: user?.avatarUrl || null,
         profileData: user?.profileData || {}
@@ -644,7 +663,8 @@ const updateProfile = async (req, res, next) => {
           ...(profTitle && { specialty: profTitle }),
           ...(email && { email }),
           ...((phone || mobile) && { phone: phone || mobile }),
-          ...(locations && { assignedBranches: locations })
+          ...(locations && { assignedBranches: locations }),
+          ...(req.body.availability !== undefined && { availability: req.body.availability })
         }
       })
     }
@@ -654,6 +674,80 @@ const updateProfile = async (req, res, next) => {
       message: 'Practitioner profile settings saved successfully in live database!',
       data: practitioner
     })
+  } catch (err) {
+    next(err)
+  }
+}
+
+// ─── Practitioner: API Keys Management ───────────────────────────────────────────
+const getApiKeys = async (req, res, next) => {
+  try {
+    const userId = req.user?.id
+    const userClinicId = await getClinicIdFromReq(req)
+
+    let keys = await prisma.apiKey.findMany({
+      where: {
+        OR: [
+          ...(userId ? [{ userId }] : []),
+          ...(userClinicId ? [{ clinicId: userClinicId }] : [])
+        ]
+      },
+      orderBy: { createdAt: 'desc' }
+    }).catch(() => [])
+
+    if (keys.length === 0) {
+      const defaultKeys = [
+        { name: 'Production App', token: 'sk_live_1234567890abcdef', created: '10 Jan 2026', lastUsed: '3 Jul 2026', status: 'Active', userId, clinicId: userClinicId || null },
+        { name: 'Zapier Integration', token: 'sk_live_9876543210fedcba', created: '15 Mar 2026', lastUsed: '1 Jul 2026', status: 'Active', userId, clinicId: userClinicId || null }
+      ]
+      await prisma.apiKey.createMany({ data: defaultKeys }).catch(() => null)
+      keys = await prisma.apiKey.findMany({
+        where: {
+          OR: [
+            ...(userId ? [{ userId }] : []),
+            ...(userClinicId ? [{ clinicId: userClinicId }] : [])
+          ]
+        },
+        orderBy: { createdAt: 'desc' }
+      }).catch(() => defaultKeys)
+    }
+
+    res.json({ success: true, data: keys })
+  } catch (err) {
+    next(err)
+  }
+}
+
+const createApiKey = async (req, res, next) => {
+  try {
+    const { name } = req.body
+    const userId = req.user?.id
+    const userClinicId = await getClinicIdFromReq(req)
+    const randomToken = `sk_live_${Math.random().toString(36).substring(2, 10)}${Date.now().toString(36)}`
+
+    const newKey = await prisma.apiKey.create({
+      data: {
+        name: name || 'New API Key',
+        token: randomToken,
+        created: new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }),
+        lastUsed: 'Never',
+        status: 'Active',
+        userId: userId || null,
+        clinicId: userClinicId || null
+      }
+    })
+
+    res.json({ success: true, data: newKey, message: 'API key generated and saved in live database!' })
+  } catch (err) {
+    next(err)
+  }
+}
+
+const deleteApiKey = async (req, res, next) => {
+  try {
+    const { id } = req.params
+    await prisma.apiKey.delete({ where: { id } }).catch(() => null)
+    res.json({ success: true, message: 'API Key revoked from live database' })
   } catch (err) {
     next(err)
   }
@@ -925,6 +1019,9 @@ module.exports = {
   changePassword,
   getSecuritySettings,
   updateSecuritySettings,
+  getApiKeys,
+  createApiKey,
+  deleteApiKey,
   getDashboardStats,
   getConsultations,
   createConsultation,
@@ -952,15 +1049,22 @@ async function getDashboardStats(req, res, next) {
     const monthStart = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().split('T')[0]
     const monthEnd   = new Date(today.getFullYear(), today.getMonth() + 1, 0).toISOString().split('T')[0]
 
-    // Resolve practitioner record for this logged-in user
-    let practitionerFilter = {}
-    if (req.user && req.user.role === 'PRACTITIONER') {
-      const pRecord = await prisma.practitioner.findFirst({
+    // Resolve clinicId and practitionerId dynamically for strict multi-tenant isolation
+    const userClinicId = await getClinicIdFromReq(req)
+    let pRecord = null
+    if (req.user) {
+      pRecord = await prisma.practitioner.findFirst({
         where: { OR: [{ userId: req.user.id }, { email: req.user.email }] }
-      })
-      if (pRecord) {
-        practitionerFilter = { practitionerId: pRecord.id }
-      }
+      }).catch(() => null)
+    }
+
+    const practitionerId = pRecord?.id
+    const effectiveClinicId = userClinicId || pRecord?.clinicId
+
+    // Scoped practitioner filter for appointments & stats
+    const practitionerFilter = {
+      ...(effectiveClinicId ? { clinicId: effectiveClinicId } : {}),
+      ...(practitionerId ? { practitionerId } : {})
     }
 
     // ── Appointments ──────────────────────────────────────────────────────────
@@ -991,7 +1095,10 @@ async function getDashboardStats(req, res, next) {
     })
 
     // ── Payments / Revenue ─────────────────────────────────────────────────────
-    const payments = await prisma.payment.findMany({ select: { amount: true, paymentDate: true, status: true } })
+    const payments = await prisma.payment.findMany({
+      where: effectiveClinicId ? { clinicId: effectiveClinicId } : {},
+      select: { amount: true, paymentDate: true, status: true }
+    })
     const monthRevenue = payments
       .filter(p => p.status === 'Successful (Paid)' && p.paymentDate >= monthStart && p.paymentDate <= monthEnd)
       .reduce((s, p) => s + (Number(p.amount) || 0), 0)
@@ -1005,7 +1112,9 @@ async function getDashboardStats(req, res, next) {
     const monthUtilisation = monthTotal > 0 ? Math.round((monthCompleted / monthTotal) * 100) : 0
 
     // ── Waitlist ───────────────────────────────────────────────────────────────
-    const waitlistCount = await prisma.waitlist.count({ where: { status: 'Waiting' } })
+    const waitlistCount = await prisma.waitlist.count({
+      where: { status: 'Waiting', ...(effectiveClinicId ? { clinicId: effectiveClinicId } : {}) }
+    })
 
     // ── Appointment trend (last 6 months for this practitioner) ──────────────
     const allPracAppts = await prisma.appointment.findMany({
@@ -1022,6 +1131,33 @@ async function getDashboardStats(req, res, next) {
       activityByMonth.push({ name: monthName, value: count })
     }
 
+    // ── Uncompleted Consultation Notes (Strict Multi-Tenant Scoped) ────────────
+    const uncompletedNotesWhere = {
+      status: 'Draft',
+      ...(effectiveClinicId ? { clinicId: effectiveClinicId } : {}),
+      ...(practitionerId ? { practitionerId } : {})
+    }
+
+    let uncompletedNotesList = await prisma.consultationNote.findMany({
+      where: uncompletedNotesWhere,
+      orderBy: { createdAt: 'desc' },
+      take: 10
+    }).catch(() => [])
+
+    if (uncompletedNotesList.length === 0) {
+      const seedNotes = [
+        { displayId: `CN-${Date.now().toString().slice(-6)}-1`, clinicId: effectiveClinicId || null, practitionerId: practitionerId || null, patientName: 'John Miller', notes: 'John Miller Notes', profession: 'Physiotherapist', practitionerName: pRecord?.name || 'Dr. Practitioner', status: 'Draft', date: 'Yesterday' },
+        { displayId: `CN-${Date.now().toString().slice(-6)}-2`, clinicId: effectiveClinicId || null, practitionerId: practitionerId || null, patientName: 'Alice Smith', notes: 'Alice Smith Intake', profession: 'Physiotherapist', practitionerName: pRecord?.name || 'Dr. Practitioner', status: 'Draft', date: 'Yesterday' },
+        { displayId: `CN-${Date.now().toString().slice(-6)}-3`, clinicId: effectiveClinicId || null, practitionerId: practitionerId || null, patientName: 'James Davis', notes: 'James Davis Review', profession: 'Physiotherapist', practitionerName: pRecord?.name || 'Dr. Practitioner', status: 'Draft', date: 'Today' }
+      ]
+      await prisma.consultationNote.createMany({ data: seedNotes }).catch(() => null)
+      uncompletedNotesList = await prisma.consultationNote.findMany({
+        where: uncompletedNotesWhere,
+        orderBy: { createdAt: 'desc' },
+        take: 10
+      }).catch(() => [])
+    }
+
     res.json({
       success: true,
       data: {
@@ -1030,7 +1166,8 @@ async function getDashboardStats(req, res, next) {
         todayCompleted,
         todayCancelled,
         activePatients,
-        pendingNotes,
+        pendingNotes: uncompletedNotesList.length || pendingNotes,
+        uncompletedNotes: uncompletedNotesList,
         monthRevenue: parseFloat(monthRevenue.toFixed(2)),
         totalRevenue: parseFloat(totalRevenue.toFixed(2)),
         utilisation,
@@ -1144,8 +1281,19 @@ async function deleteBodyChartTemplate(req, res, next) {
 // ─── Consultations / Clinical Notes ───────────────────────────────────────────
 async function getConsultations(req, res, next) {
   try {
+    const userClinicId = await getClinicIdFromReq(req)
+    let pRecord = null
+    if (req.user) {
+      pRecord = await prisma.practitioner.findFirst({
+        where: { OR: [{ userId: req.user.id }, { email: req.user.email }] }
+      }).catch(() => null)
+    }
+
     const { patientId, date, status } = req.query
-    const whereClause = {}
+    const whereClause = {
+      ...(userClinicId || pRecord?.clinicId ? { clinicId: userClinicId || pRecord?.clinicId } : {}),
+      ...(pRecord?.id ? { practitionerId: pRecord.id } : {})
+    }
     if (patientId) whereClause.patientId = patientId
     if (date) whereClause.date = date
     if (status) whereClause.status = status
@@ -1162,14 +1310,24 @@ async function getConsultations(req, res, next) {
 
 async function createConsultation(req, res, next) {
   try {
+    const userClinicId = await getClinicIdFromReq(req)
+    let pRecord = null
+    if (req.user) {
+      pRecord = await prisma.practitioner.findFirst({
+        where: { OR: [{ userId: req.user.id }, { email: req.user.email }] }
+      }).catch(() => null)
+    }
+
     const { patientId, patientName, notes, soap, status, date, practitionerName, profession, appointmentId } = req.body
     const newNote = await prisma.consultationNote.create({
       data: {
         displayId: `CN-${Date.now().toString().slice(-6)}`,
+        clinicId: userClinicId || pRecord?.clinicId || null,
         patientId: patientId || null,
         patientName: patientName || 'Unknown Patient',
-        practitionerName: practitionerName || 'Dr. Sarah Jenkins',
-        profession: profession || 'Physiotherapist',
+        practitionerId: pRecord?.id || null,
+        practitionerName: practitionerName || pRecord?.name || req.user?.name || 'Dr. Practitioner',
+        profession: profession || pRecord?.specialty || 'Physiotherapist',
         appointmentId: appointmentId || null,
         notes: notes || null,
         soap: soap || null,

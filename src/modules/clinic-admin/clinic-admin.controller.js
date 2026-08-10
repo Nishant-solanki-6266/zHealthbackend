@@ -1350,8 +1350,8 @@ const createPayment = async (req, res, next) => {
 
     const userClinicId = await getClinicIdFromReq(req)
 
-    const count = await prisma.payment.count().catch(() => 0)
-    const receiptNumber = `RCPT-${String(count + 384).padStart(4, '0')}`
+    const randNum = Math.floor(1000 + Math.random() * 9000)
+    const receiptNumber = `RCPT-${Date.now().toString().slice(-4)}${randNum}`
     const finalClientName = from || clientName || 'Client'
     const finalDate = paymentDate || date || new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
 
@@ -1761,21 +1761,35 @@ const getReports = async (req, res, next) => {
 const getDocuments = async (req, res, next) => {
   try {
     const { search, type, status, client, uploadedBy, date } = req.query
+    const userRole = req.user?.role
+    const userClinicId = await getClinicIdFromReq(req)
+
+    let whereClause = {}
+    if (userRole !== 'SUPER_ADMIN' && userClinicId) {
+      whereClause = {
+        OR: [
+          { clinicId: userClinicId },
+          { clinicId: null }
+        ]
+      }
+    }
+
     let documents = await prisma.document.findMany({
+      where: whereClause,
       orderBy: { createdAt: 'desc' }
     }).catch(() => [])
 
     if (documents.length === 0) {
       const initialDocs = [
-        { name: 'MERN STACK CERTIFICATE', patientName: 'dftyui', sentTo: 'Client John Miller', uploadBy: 'Dr. APJ Kalam', date: '3 Aug 2026', type: 'Assessment', status: 'Sent' },
-        { name: 'Docname.doc', patientName: 'Zoya Clinic', sentTo: 'Client John Miller', uploadBy: 'Clinic Admin', date: '2 Jan 2026', type: 'Assessment', status: 'Active' },
-        { name: 'Patient_Consent.pdf', patientName: 'Zoya Clinic', sentTo: 'Client John Miller', uploadBy: 'Zoya Clinic', date: '5 Jan 2026', type: 'Consent', status: 'Active' },
-        { name: 'Treatment_Plan.docx', patientName: 'Zoya Clinic', sentTo: 'Client John Miller', uploadBy: 'Super Admin', date: '10 Jan 2026', type: 'Plan', status: 'Sent' },
-        { name: 'Referral_Letter.pdf', patientName: 'Melbourne Clinic', sentTo: 'Dr. Sarah Jenkins', uploadBy: 'Emily Clark (Receptionist)', date: '15 Jan 2026', type: 'Referral', status: 'Draft' }
+        { clinicId: userClinicId || null, name: 'MERN STACK CERTIFICATE', patientName: 'dftyui', sentTo: 'Client John Miller', uploadBy: 'Dr. APJ Kalam', date: '3 Aug 2026', type: 'Assessment', status: 'Sent' },
+        { clinicId: userClinicId || null, name: 'Docname.doc', patientName: 'Zoya Clinic', sentTo: 'Client John Miller', uploadBy: 'Clinic Admin', date: '2 Jan 2026', type: 'Assessment', status: 'Active' },
+        { clinicId: userClinicId || null, name: 'Patient_Consent.pdf', patientName: 'Zoya Clinic', sentTo: 'Client John Miller', uploadBy: 'Zoya Clinic', date: '5 Jan 2026', type: 'Consent', status: 'Active' },
+        { clinicId: userClinicId || null, name: 'Treatment_Plan.docx', patientName: 'Zoya Clinic', sentTo: 'Client John Miller', uploadBy: 'Super Admin', date: '10 Jan 2026', type: 'Plan', status: 'Sent' },
+        { clinicId: userClinicId || null, name: 'Referral_Letter.pdf', patientName: 'Melbourne Clinic', sentTo: 'Dr. Sarah Jenkins', uploadBy: 'Emily Clark (Receptionist)', date: '15 Jan 2026', type: 'Referral', status: 'Draft' }
       ]
 
       await prisma.document.createMany({ data: initialDocs }).catch(() => {})
-      documents = await prisma.document.findMany({ orderBy: { createdAt: 'desc' } }).catch(() => initialDocs)
+      documents = await prisma.document.findMany({ where: whereClause, orderBy: { createdAt: 'desc' } }).catch(() => initialDocs)
     }
 
     // Return documents with their exact stored uploadBy value
@@ -1809,6 +1823,7 @@ const getDocuments = async (req, res, next) => {
 const createDocument = async (req, res, next) => {
   try {
     const { name, patientName, sentTo, uploadBy, date, type, status } = req.body
+    const userClinicId = await getClinicIdFromReq(req)
 
     // Derive uploader name: prefer frontend-supplied uploadBy, then user's actual name from token,
     // then fall back to a role-based label so it always reflects who really uploaded.
@@ -1831,6 +1846,7 @@ const createDocument = async (req, res, next) => {
 
     const newDoc = await prisma.document.create({
       data: {
+        clinicId: userClinicId || null,
         name: name || 'Document.doc',
         patientName: patientName || 'Client',
         sentTo: sentTo || 'Client John Miller',

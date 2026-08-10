@@ -60,4 +60,8 @@ router.post('/change-password', controller.changePassword)
 router.get('/security-settings', controller.getSecuritySettings)
 router.put('/security-settings', controller.updateSecuritySettings)
 
+router.get('/settings/api-keys', controller.getApiKeys)
+router.post('/settings/api-keys', controller.createApiKey)
+router.delete('/settings/api-keys/:id', controller.deleteApiKey)
+
 module.exports = router
