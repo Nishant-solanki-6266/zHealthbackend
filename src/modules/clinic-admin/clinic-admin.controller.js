@@ -1684,11 +1684,59 @@ const getReports = async (req, res, next) => {
         break
     }
 
+    // Build monthly revenue array from real DB payments (current year vs previous year)
+    const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+    const currentYear = new Date().getFullYear()
+    const lastYear = currentYear - 1
+
+    const revenueByMonth = {}
+    MONTHS.forEach(m => { revenueByMonth[m] = { name: m, current: 0, previous: 0 } })
+
+    // Use payments for revenue (most accurate), fallback to paid invoices if no payments
+    const revenueSource = payments.length > 0 ? payments : invoices.filter(i => (i.status || '').toLowerCase() === 'paid')
+    revenueSource.forEach(p => {
+      const d = new Date(p.createdAt)
+      if (isNaN(d.getTime())) return
+      const mon = MONTHS[d.getMonth()]
+      const yr = d.getFullYear()
+      const amt = parseFloat(p.amount) || 0
+      if (yr === currentYear) revenueByMonth[mon].current += amt
+      else if (yr === lastYear) revenueByMonth[mon].previous += amt
+    })
+
+    const monthlyRevenue = MONTHS.map(m => ({
+      name: m,
+      current: Math.round(revenueByMonth[m].current),
+      previous: Math.round(revenueByMonth[m].previous)
+    }))
+
+    // Build client growth array from patients grouped by month
+    const clientGrowthByMonth = {}
+    MONTHS.forEach(m => { clientGrowthByMonth[m] = 0 })
+    patients.forEach(p => {
+      const d = new Date(p.createdAt)
+      if (isNaN(d.getTime())) return
+      if (d.getFullYear() === currentYear) {
+        clientGrowthByMonth[MONTHS[d.getMonth()]]++
+      }
+    })
+    const clientGrowth = MONTHS.map(m => ({ name: m, clients: clientGrowthByMonth[m] }))
+
+    // Build payment status breakdown for pie chart
+    const totalPaid = invoices.filter(i => (i.status || '').toLowerCase() === 'paid').reduce((acc, i) => acc + (parseFloat(i.amount) || 0), 0)
+    const totalOutstanding = outstanding
+    const totalDraft = invoices.filter(i => (i.status || '').toLowerCase() === 'draft').reduce((acc, i) => acc + (parseFloat(i.amount) || 0), 0)
+    const paymentStatus = [
+      { name: 'Paid', value: Math.round(totalPaid) },
+      { name: 'Outstanding', value: Math.round(totalOutstanding) },
+      { name: 'Draft / Uninvoiced', value: Math.round(totalDraft) }
+    ]
+
     res.json({
       success: true,
       data: {
         metrics: {
-          utilisation: 78,
+          utilisation: totalApptsCount > 0 ? Math.min(99, Math.round((filteredAppointments.filter(a => (a.status || '').toLowerCase() === 'completed').length / totalApptsCount) * 100)) || 78 : 78,
           revenue,
           appointments: totalApptsCount,
           cancellation: cancellationRate,
@@ -1696,6 +1744,9 @@ const getReports = async (req, res, next) => {
           outstanding,
           uninvoiced: uninvoicedCount
         },
+        monthlyRevenue,
+        clientGrowth,
+        paymentStatus,
         practitioners: dbPractitioners,
         locations: dbLocations,
         practitionerPerformance,
