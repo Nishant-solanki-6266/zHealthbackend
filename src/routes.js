@@ -7,6 +7,8 @@ const clinicAdminRoutes = require('./modules/clinic-admin/clinic-admin.routes')
 const practitionerRoutes = require('./modules/practitioner/practitioner.routes')
 const salesRoutes = require('./modules/sales-executive/sales-executive.routes')
 const patientRoutes = require('./modules/patient/patient.routes')
+const aiRoutes = require('./modules/ai/ai.routes')
+const notificationRoutes = require('./modules/notification/notification.routes')
 
 // Health check endpoint
 router.get('/health', (req, res) => {
@@ -27,6 +29,8 @@ router.use('/clinic-admin', clinicAdminRoutes)
 router.use('/practitioner', practitionerRoutes)
 router.use('/sales', salesRoutes)
 router.use('/patient', patientRoutes)
+router.use('/ai', aiRoutes)
+router.use('/notifications', notificationRoutes)
 
 // Shared Message Board routes for authenticated users
 router.get('/message-board', authenticate, superAdminController.getMessageBoardItems)
