@@ -13,6 +13,10 @@ router.post('/consultations', controller.createConsultation)
 router.put('/consultations/:id', controller.updateConsultation)
 router.delete('/consultations/:id', controller.deleteConsultation)
 
+router.get('/exercises', controller.getPrescribedExercises)
+router.post('/exercises', controller.createPrescribedExercise)
+router.put('/exercises/:id/compliance', controller.updatePrescribedExerciseCompliance)
+
 router.get('/appointments', controller.getAppointments)
 router.post('/appointments', controller.createAppointment)
 router.put('/appointments/:id', controller.updateAppointment)
@@ -50,6 +54,13 @@ router.get('/settings/templates', adminController.getSettingsTemplates)
 router.post('/settings/templates', adminController.createSettingsTemplate)
 router.put('/settings/templates/:type/:id', adminController.updateSettingsTemplate)
 router.delete('/settings/templates/:type/:id', adminController.deleteSettingsTemplate)
+
+router.get('/documents', adminController.getDocuments)
+router.post('/documents', adminController.createDocument)
+
+router.get('/invoices', adminController.getInvoices)
+router.post('/invoices', adminController.createInvoice)
+router.put('/invoices/:id', adminController.updateInvoice)
 
 
 router.get('/login-history', controller.getLoginHistory)
